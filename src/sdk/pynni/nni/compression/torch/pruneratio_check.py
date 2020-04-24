@@ -28,10 +28,10 @@ class PruneRatio_Checker:
         # Variable use the same add operation of Tensor (torch.Tensor.__add__)
         self.func_need_hook = [(torch.Tensor, 'view'), (torch.Tensor, '__add__')]
         
-        for attr, func in torch.nn.functional.__dict__:
+        for attr, func in torch.nn.functional.__dict__.items():
             if hasattr(func, '__call__'):
                 # filter out the funtions 
-                self.func_need_hook.append(torch.nn.functional, attr)
+                self.func_need_hook.append((torch.nn.functional, attr))
         self.ori_func = []
         self.visted = set()
         # Init the hook functions
@@ -44,7 +44,7 @@ class PruneRatio_Checker:
     def hooks_length(self):
         return len(self.hooks)
 
-    def op_decorator(self, func):
+    def op_decorator(self, func, name):
         def new_func(*args, **kwargs):
             inputs = []
             for input in args:
@@ -55,7 +55,7 @@ class PruneRatio_Checker:
             iids = [id(input) for input in inputs]
             oid = id(out)
             self.tensors.update(iids)
-            self.tensors.update(oid)
+            self.tensors.add(oid)
             if oid not in self.id2obj:
                 self.id2obj[oid] = out
 
@@ -65,7 +65,9 @@ class PruneRatio_Checker:
                 if iids[i] not in self.forward_edge:
                     self.forward_edge[iids[i]] = [oid]
                 elif oid not in self.forward_edge[iids[i]]:
-                    self.forward_edge[iids[i]].append(oid)     
+                    self.forward_edge[iids[i]].append(oid)  
+            # For Debug
+            out.debug_info = 'created by %s' % name
             return out
         return new_func
 
@@ -83,14 +85,14 @@ class PruneRatio_Checker:
             # by their submodules. Therefore, we only record the lowest level connection.
             if oid in checker.tensors:
                 return 
-            self.layers.update(mid)
+            self.layers.add(mid)
             self.id2obj[mid] = module
             
-            checker.tensors.update(oid)
+            checker.tensors.add(oid)
             checker.id2obj[oid] = output
             for i in range(len(iids)):
                 if iids[i] not in checker.tensors:
-                    checker.tensors.update(iids[i])
+                    checker.tensors.add(iids[i])
                     checker.id2obj[iids[i]] = linputs[i]
                 if iids[i] not in checker.forward_edge:
                     checker.forward_edge[iids[i]] = [mid]
@@ -100,6 +102,7 @@ class PruneRatio_Checker:
             self.forward_edge[mid] = [oid]
             module.input_tensors = iids
             module.output_tensor = oid
+            output.debug_info = 'created by %s' % str(module)
             
         return forward_hook
 
@@ -118,7 +121,7 @@ class PruneRatio_Checker:
         for mod, attr in self.func_need_hook:
             ori_func = getattr(mod, attr)
             self.ori_func.append(ori_func)
-            new_func = self.op_decorator(ori_func)
+            new_func = self.op_decorator(ori_func, attr)
             setattr(mod, attr, new_func)
             
         
@@ -145,17 +148,23 @@ class PruneRatio_Checker:
             if self.id2obj[curid].prune['channel'] != channel:
                 return False
             return True
-        self.visted.update(curid)
+        self.visted.add(curid)
         outchannel = channel
         if isinstance(self.id2obj[curid], torch.Tensor):
-            torch.Tensor.prune={'channel', channel}
+            torch.Tensor.prune={'channel' : channel}
         elif isinstance(self.id2obj[curid], torch.nn.Conv2d):
             conv = self.id2obj[curid]
             outchannel = conv.out_channels * conv.prune['ratio']
         OK = True
-        for next in self.forward_edge[curid]:
-            re = self.traverse(next, outchannel)
-            OK = OK and re
+        #Debug
+        if isinstance(self.id2obj[curid], torch.Tensor):
+            print(self.id2obj[curid].size())
+        else:
+            print(self.id2obj[curid])
+        if curid in self.forward_edge:
+            for next in self.forward_edge[curid]:
+                re = self.traverse(next, outchannel)
+                OK = OK and re
         return OK
 
     def check(self, ratios):
@@ -171,7 +180,7 @@ class PruneRatio_Checker:
             the names that model.named_modules() functions 
             returns.
         """
-        for name, ratio in ratios:
+        for name, ratio in ratios.items():
             layer = self.named_layers[name]
             if isinstance(layer, nn.Conv2d):
                 layer.prune = {'ratio' : ratio}
@@ -183,14 +192,21 @@ class PruneRatio_Checker:
                 layer.prune = { 'ratio' : ratio }
         self.visted.clear()
         # N * C * H * W
-        is_legal = self.traverse(data, data.size(1))
+        is_legal = self.traverse(id(self.data), self.data.size(1))
         # remove the ratio tag of the tensor
-        for name, ratio in ratios:
+        for name, ratio in ratios.items():
             layer = self.named_layers[name]
             if hasattr(layer, 'prune'):
                 delattr(layer, 'prune')
             if hasattr(layer, 'prune'):
                 delattr(layer, 'prune')
+        for tid in self.tensors:
+            if hasattr(self.id2obj[tid], 'prune'):
+                print(self.id2obj[tid].size())
+                print(self.id2obj[tid].__dict__.keys())
+                print(hasattr(self.id2obj[tid], 'prune'), self.id2obj[tid].prune)
+                print(self.id2obj[tid].debug_info)
+                delattr(self.id2obj[tid], 'prune')
         return is_legal
             
 
