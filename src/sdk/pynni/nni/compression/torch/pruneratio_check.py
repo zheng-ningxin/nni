@@ -27,11 +27,13 @@ class PruneRatio_Checker:
         # The functions need to be hooked to build up the graph
         # Variable use the same add operation of Tensor (torch.Tensor.__add__)
         self.func_need_hook = [(torch.Tensor, 'view'), (torch.Tensor, '__add__')]
-        
+        functional_keys = ['pool', 'batch_norm', 'dropout', 'elu', 'softmax', 'tanh' 'sigmoid']
         for attr, func in torch.nn.functional.__dict__.items():
-            if hasattr(func, '__call__'):
-                # filter out the funtions 
-                self.func_need_hook.append((torch.nn.functional, attr))
+            for name_key in functional_keys:
+                # filter out the target functional module that need to be hooked
+                if name_key in attr:
+                    self.func_need_hook.append((torch.nn.functional, attr))
+                    break
         self.ori_func = []
         self.visted = set()
         # Init the hook functions
@@ -85,6 +87,10 @@ class PruneRatio_Checker:
             # by their submodules. Therefore, we only record the lowest level connection.
             if oid in checker.tensors:
                 return 
+
+            print("#################")
+            print(type(module))
+
             self.layers.add(mid)
             self.id2obj[mid] = module
             
@@ -141,6 +147,13 @@ class PruneRatio_Checker:
             Traverse the tensors and check if the prune ratio
             is legal for the network architecture.
         """
+        #Debug
+        if isinstance(self.id2obj[curid], torch.Tensor):
+            print(self.id2obj[curid].size())
+        else:
+            print('##################')
+            print(self.id2obj[curid])
+
         if curid in self.visted:
             # Only the tensors can be visited twice, the conv layers
             # won't be access twice in the DFS progress
@@ -151,19 +164,16 @@ class PruneRatio_Checker:
         self.visted.add(curid)
         outchannel = channel
         if isinstance(self.id2obj[curid], torch.Tensor):
-            torch.Tensor.prune={'channel' : channel}
-        elif isinstance(self.id2obj[curid], torch.nn.Conv2d):
+            self.id2obj[curid].prune = {'channel' : channel}
+        elif isinstance(self.id2obj[curid], torch.nn.Conv2d) and hasattr(self.id2obj[curid], 'prune'):
             conv = self.id2obj[curid]
             outchannel = conv.out_channels * conv.prune['ratio']
         OK = True
-        #Debug
-        if isinstance(self.id2obj[curid], torch.Tensor):
-            print(self.id2obj[curid].size())
-        else:
-            print(self.id2obj[curid])
+
         if curid in self.forward_edge:
-            for next in self.forward_edge[curid]:
-                re = self.traverse(next, outchannel)
+            for next_ in self.forward_edge[curid]:
+                ## After change the next to next_ , 
+                re = self.traverse(next_, outchannel)
                 OK = OK and re
         return OK
 
@@ -202,10 +212,6 @@ class PruneRatio_Checker:
                 delattr(layer, 'prune')
         for tid in self.tensors:
             if hasattr(self.id2obj[tid], 'prune'):
-                print(self.id2obj[tid].size())
-                print(self.id2obj[tid].__dict__.keys())
-                print(hasattr(self.id2obj[tid], 'prune'), self.id2obj[tid].prune)
-                print(self.id2obj[tid].debug_info)
                 delattr(self.id2obj[tid], 'prune')
         return is_legal
             
