@@ -12,6 +12,9 @@ class PruneRatio_Checker:
     def __init__(self, model, data):
         self.model = model
         self.named_layers = dict(model.named_modules())
+        # Add a layer name attribute into each submodule of the model
+        for name, layer in self.named_layers.items():
+            layer.module_name = name
         # data to used to build the topology of the network
         # For example, data, label = next(iter(dataloader))
         self.data = data
@@ -26,8 +29,15 @@ class PruneRatio_Checker:
         
         # The functions need to be hooked to build up the graph
         # Variable use the same add operation of Tensor (torch.Tensor.__add__)
-        self.func_need_hook = [(torch.Tensor, 'view'), (torch.Tensor, '__add__')]
-        functional_keys = ['pool', 'batch_norm', 'dropout', 'elu', 'softmax', 'tanh' 'sigmoid']
+        self.func_need_hook = []
+        tensor_keys = ['view', '__add__', '__iadd__']
+        #tensor_keys = ['view', '__add__']
+        for attr in tensor_keys:
+            self.func_need_hook.append((torch.Tensor, attr))
+        # elu is for the activations such as, relu, celu
+        # pool is for the pooling layers, such as avg_pool2d 
+        functional_keys = [ 'pool', 'batch_norm', 'dropout', 'elu', 
+                            'softmax', 'tanh' 'sigmoid']
         for attr, func in torch.nn.functional.__dict__.items():
             for name_key in functional_keys:
                 # filter out the target functional module that need to be hooked
@@ -68,8 +78,15 @@ class PruneRatio_Checker:
                     self.forward_edge[iids[i]] = [oid]
                 elif oid not in self.forward_edge[iids[i]]:
                     self.forward_edge[iids[i]].append(oid)  
-            # For Debug
-            out.debug_info = 'created by %s' % name
+            # save the graph related info 
+            if hasattr(out, 'graph_info'):
+                if 'from' in out.graph_info:
+                    # __iadd__ may access a tensor that alreasy exists
+                    out.graph_info['from'].append(name)
+                else:
+                    out.graph_info['from'] = [name]
+            else:
+                out.graph_info = {'from' : [name]}
             return out
         return new_func
 
@@ -108,7 +125,7 @@ class PruneRatio_Checker:
             self.forward_edge[mid] = [oid]
             module.input_tensors = iids
             module.output_tensor = oid
-            output.debug_info = 'created by %s' % str(module)
+            output.gragh_info = {'from' : [module.module_name]}
             
         return forward_hook
 
@@ -149,25 +166,31 @@ class PruneRatio_Checker:
         """
         #Debug
         if isinstance(self.id2obj[curid], torch.Tensor):
-            print(self.id2obj[curid].size())
+            print(self.id2obj[curid].size(), '   Channel', channel)
         else:
             print('##################')
-            print(self.id2obj[curid])
+            print(self.id2obj[curid].module_name, '   ',self.id2obj[curid], '   Channel', channel)
 
         if curid in self.visted:
             # Only the tensors can be visited twice, the conv layers
             # won't be access twice in the DFS progress
             # check if the dimmension is ok
+            print('######in visited####')
             if self.id2obj[curid].prune['channel'] != channel:
+                print(self.id2obj[curid].graph_info['from'])
+                print(self.id2obj[curid].prune['channel'], 'differ from',channel)
                 return False
             return True
         self.visted.add(curid)
         outchannel = channel
         if isinstance(self.id2obj[curid], torch.Tensor):
             self.id2obj[curid].prune = {'channel' : channel}
-        elif isinstance(self.id2obj[curid], torch.nn.Conv2d) and hasattr(self.id2obj[curid], 'prune'):
+        elif isinstance(self.id2obj[curid], torch.nn.Conv2d):
             conv = self.id2obj[curid]
-            outchannel = conv.out_channels * conv.prune['ratio']
+            if hasattr(conv, 'prune'):
+                outchannel = conv.out_channels * conv.prune['ratio']
+            else:
+                outchannel = conv.out_channels
         OK = True
 
         if curid in self.forward_edge:
