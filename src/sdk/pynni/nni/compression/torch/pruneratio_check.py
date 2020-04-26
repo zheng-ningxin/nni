@@ -30,7 +30,7 @@ class PruneRatio_Checker:
         # The functions need to be hooked to build up the graph
         # Variable use the same add operation of Tensor (torch.Tensor.__add__)
         self.func_need_hook = []
-        torch_keys = ['flatten', 'squeeze', 'unsqueeze']
+        torch_keys = ['flatten', 'squeeze', 'unsqueeze', 'cat']
         for attr in torch_keys:
             self.func_need_hook.append((torch, attr))
         tensor_keys = ['view', '__add__', '__iadd__', 'flatten', 'squeeze', 'unsqueeze']
@@ -40,7 +40,7 @@ class PruneRatio_Checker:
         # elu is for the activations such as, relu, celu
         # pool is for the pooling layers, such as avg_pool2d 
         functional_keys = [ 'pool', 'batch_norm', 'dropout', 'elu', 
-                            'softmax', 'tanh' 'sigmoid']
+                            'softmax', 'tanh' 'sigmoid', 'interpolate']
         for attr, func in torch.nn.functional.__dict__.items():
             for name_key in functional_keys:
                 # filter out the target functional module that need to be hooked
@@ -93,26 +93,64 @@ class PruneRatio_Checker:
             return out
         return new_func
 
+
+    def get_output_tensors(self, output):
+        """
+        Some layers/modules may return servaral tensors as output.
+        So, We need find the real output tensor out and build the 
+        network architecture based on them.
+        """
+        out_tensors = []
+        if isinstance(output, dict):
+            # some layers may return their output as a dict 
+            # ex. the IntermediateLayerGetter in the face detection jobs.
+            for key, val in output.items():
+                if isinstance(val, torch.Tensor):
+                    out_tensors.append(val)
+        elif isinstance(output, list) or isinstance(output, tuple):
+            # list
+            out_tensors = list(filter(lambda x:(isinstance(x, torch.Tensor)), output))
+        else:
+            # if the output is a already a tensor/variable, then return itself
+            return [output]
+        return out_tensors
+
+    
     def get_forward_hook(self):
         def forward_hook(module, inputs, output):
+            print("#################In forward hook####")
+            print(type(module))
+
             checker = module.pruneratio_checker
             linputs = list(inputs)
             # Filter the Tensor or Variable inputs out
             linputs = list(filter(lambda x: isinstance(x, Tensor) or isinstance(x, Variable), linputs))
             iids = [id(input) for input in linputs]
-            oid = id(output)
+            t_outputs = self.get_output_tensors(output)
+            oids = [id(t) for t in t_outputs]
             mid = id(module)
             # For the modules that have multiple submodules, for example(Sequential)
             # They will return at here, because the output tensor is already added 
             # by their submodules. Therefore, we only record the lowest level connection.
-            if oid in checker.tensors:
-                return 
-
+            flag = False
+            for oid in oids:
+                if oid not in checker.tensors:
+                    flag = True
+                    break 
+            if not flag:
+                # if all output tensors are already created, in this case, the module
+                # is a father-module, and we only draw the lowest-level network architecture
+                return
+            # involve the output tensors into the graph
             self.layers.add(mid)
             self.id2obj[mid] = module
-            
-            checker.tensors.add(oid)
-            checker.id2obj[oid] = output
+            for tid, _out in enumerate(t_outputs):
+                if oids[tid] not in checker.tensors:
+                    checker.tensors.add(oids[tid])
+                    checker.id2obj[oids[tid]] = _out
+                    _out.graph_info = {'from' : [module.module_name]}
+            self.forward_edge[mid] = oids
+
             for i in range(len(iids)):
                 if iids[i] not in checker.tensors:
                     checker.tensors.add(iids[i])
@@ -122,15 +160,12 @@ class PruneRatio_Checker:
                 elif mid not in checker.forward_edge[iids[i]]:
                     checker.forward_edge[iids[i]].append(mid)
             # We need to track the input and output tensors from the model perspective
-            self.forward_edge[mid] = [oid]
-            module.input_tensors = iids
-            module.output_tensor = oid
-            output.graph_info = {'from' : [module.module_name]}
+            module.input_tensors = linputs
+            module.output_tensor = t_outputs
 
-            print("#################In forward hook####")
-            print(type(module))
-            print(output.size())
-            print(output.graph_info)
+
+            print([x.size() for x in t_outputs])
+            #print(output.graph_info)
         return forward_hook
 
 
