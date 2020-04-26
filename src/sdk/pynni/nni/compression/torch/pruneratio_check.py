@@ -188,7 +188,7 @@ class PruneRatio_Checker:
         elif isinstance(self.id2obj[curid], torch.nn.Conv2d):
             conv = self.id2obj[curid]
             if hasattr(conv, 'prune'):
-                outchannel = conv.out_channels * conv.prune['ratio']
+                outchannel = int(conv.out_channels * conv.prune['ratio'])
             else:
                 outchannel = conv.out_channels
         OK = True
@@ -237,6 +237,43 @@ class PruneRatio_Checker:
             if hasattr(self.id2obj[tid], 'prune'):
                 delattr(self.id2obj[tid], 'prune')
         return is_legal
+    
+
+    def visual_traverse(self, curid, graph, last_visit):
+        """"
+        Input:
+            graph: the handle of the Dgraph
+        """
+
+        if curid in self.visted:
+            # Already visited, only connect to the last visited node
+            if last_visit is not None:
+                graph.edge(str(last_visit), str(curid))
+            return
+        self.visted.add(curid)
+        curobj = self.id2obj[curid]
+        if isinstance(curobj, torch.Tensor) or isinstance(curobj, torch.autograd.Variable):
+            t_name = 'Tensor:{}'.format(curobj.size())
+            if hasattr(curobj, 'graph_info'):
+                t_name += '\n Created by %s' % curobj.graph_info['from'] 
+            graph.node(str(curid), t_name, shape='box', color='lightblue')
+        else:
+            graph.node(str(curid), curobj.module_name, shape='ellipse', color='orange')
+        # Connect to the last visited node
+        if last_visit is not None:
+            graph.edge(str(last_visit), str(curid))
+        if curid in self.forward_edge:
+            for next_ in self.forward_edge[curid]:
+                self.visual_traverse(next_, graph, curid)
+        
+
+    def visualization(self, filename='network', format='jpg'):
+        import graphviz
+        graph = graphviz.Digraph(format=format)
+        self.visted.clear()
+        graph_start = id(self.data)
+        self.visual_traverse(graph_start, graph, None)
+        graph.render(filename)
             
 
 
