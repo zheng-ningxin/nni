@@ -30,7 +30,10 @@ class PruneRatio_Checker:
         # The functions need to be hooked to build up the graph
         # Variable use the same add operation of Tensor (torch.Tensor.__add__)
         self.func_need_hook = []
-        tensor_keys = ['view', '__add__', '__iadd__']
+        torch_keys = ['flatten', 'squeeze', 'unsqueeze']
+        for attr in torch_keys:
+            self.func_need_hook.append((torch, attr))
+        tensor_keys = ['view', '__add__', '__iadd__', 'flatten', 'squeeze', 'unsqueeze']
         #tensor_keys = ['view', '__add__']
         for attr in tensor_keys:
             self.func_need_hook.append((torch.Tensor, attr))
@@ -48,7 +51,7 @@ class PruneRatio_Checker:
         self.visted = set()
         # Init the hook functions
         self.deploy_hooks()
-        out = self.model(data)
+        self.out = self.model(data)
         # Clear the hook functions
         self.remove_hooks()
 
@@ -105,9 +108,6 @@ class PruneRatio_Checker:
             if oid in checker.tensors:
                 return 
 
-            print("#################")
-            print(type(module))
-
             self.layers.add(mid)
             self.id2obj[mid] = module
             
@@ -125,8 +125,12 @@ class PruneRatio_Checker:
             self.forward_edge[mid] = [oid]
             module.input_tensors = iids
             module.output_tensor = oid
-            output.gragh_info = {'from' : [module.module_name]}
-            
+            output.graph_info = {'from' : [module.module_name]}
+
+            print("#################In forward hook####")
+            print(type(module))
+            print(output.size())
+            print(output.graph_info)
         return forward_hook
 
 
