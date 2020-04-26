@@ -33,7 +33,8 @@ class PruneRatio_Checker:
         torch_keys = ['flatten', 'squeeze', 'unsqueeze', 'cat']
         for attr in torch_keys:
             self.func_need_hook.append((torch, attr))
-        tensor_keys = ['view', '__add__', '__iadd__', 'flatten', 'squeeze', 'unsqueeze']
+        tensor_keys = [ 'view', '__add__', '__iadd__', 'flatten',
+                        'squeeze', 'unsqueeze', 'permute', 'contiguous']
         #tensor_keys = ['view', '__add__']
         for attr in tensor_keys:
             self.func_need_hook.append((torch.Tensor, attr))
@@ -58,13 +59,16 @@ class PruneRatio_Checker:
     @property
     def hooks_length(self):
         return len(self.hooks)
-
+    
     def op_decorator(self, func, name):
         def new_func(*args, **kwargs):
+
             inputs = []
-            for input in args:
-                if isinstance(input, Tensor) or isinstance(input, Variable):
-                    inputs.append(input)
+            if len(args) > 0:
+                inputs.extend(self.get_tensors_from(args))
+            if len(kwargs) > 0:
+                inputs.extend(self.get_tensors_from(kwargs))
+            
             out = func(*args, **kwargs)
             # build the graph
             iids = [id(input) for input in inputs]
@@ -90,45 +94,67 @@ class PruneRatio_Checker:
                     out.graph_info['from'] = [name]
             else:
                 out.graph_info = {'from' : [name]}
+
+            print('++++++++++++++++++++++')
+            print(name, 'Hooked')
+            #print(args)
+            #print(kwargs)
+            print('Input ', [x.size() for x in inputs])
+            print('Output:', out.size())
             return out
         return new_func
 
 
-    def get_output_tensors(self, output):
+    def get_tensors_from(self, args):
         """
-        Some layers/modules may return servaral tensors as output.
-        So, We need find the real output tensor out and build the 
-        network architecture based on them.
+        Some layers/modules may return servaral tensors as output
+        (IntermediateLayerGetter) or take multiple tensors as 
+        input(torch.cat). Therefore, We need find the real output/input 
+        tensor out and build the network architecture based on them.
+        Note: 
+            I find that the input format of torch.cat is the tuple of tuple
+            which looks like ((t1, t2)), so, we use recursive func to
+            find all tensors
         """
-        out_tensors = []
-        if isinstance(output, dict):
+        tensors = []
+        if isinstance(args, dict):
             # some layers may return their output as a dict 
             # ex. the IntermediateLayerGetter in the face detection jobs.
-            for key, val in output.items():
+            for key, val in args.items():
                 if isinstance(val, torch.Tensor):
-                    out_tensors.append(val)
-        elif isinstance(output, list) or isinstance(output, tuple):
-            # list
-            out_tensors = list(filter(lambda x:(isinstance(x, torch.Tensor)), output))
-        else:
+                    tensors.append(val)
+                else:
+                    tensors.extend(self.get_tensors_from(val))
+        elif isinstance(args, list) or isinstance(args, tuple):
+            # list or tuple
+            for item in args:
+                if isinstance(item, torch.Tensor):
+                    tensors.append(item)
+                else:
+                    tensors.extend(self.get_tensors_from(item))
+        elif isinstance(args, torch.Tensor) or isinstance(args, torch.autograd.Variable):
             # if the output is a already a tensor/variable, then return itself
-            return [output]
-        return out_tensors
+            tensors.append(args)
+        return tensors
 
     
     def get_forward_hook(self):
         def forward_hook(module, inputs, output):
-            print("#################In forward hook####")
-            print(type(module))
 
             checker = module.pruneratio_checker
             linputs = list(inputs)
             # Filter the Tensor or Variable inputs out
             linputs = list(filter(lambda x: isinstance(x, Tensor) or isinstance(x, Variable), linputs))
             iids = [id(input) for input in linputs]
-            t_outputs = self.get_output_tensors(output)
+            t_outputs = self.get_tensors_from(output)
             oids = [id(t) for t in t_outputs]
             mid = id(module)
+
+            print("##########In forward hook####")
+            print(module.module_name, type(module))
+        
+        
+            print('Input ', [x.size() for x in t_outputs])
             # For the modules that have multiple submodules, for example(Sequential)
             # They will return at here, because the output tensor is already added 
             # by their submodules. Therefore, we only record the lowest level connection.
@@ -163,8 +189,13 @@ class PruneRatio_Checker:
             module.input_tensors = linputs
             module.output_tensor = t_outputs
 
-
-            print([x.size() for x in t_outputs])
+            
+            print('Output:', [x.size() for x in t_outputs])
+            print("##########END forward hook####")
+            print(module.module_name, type(module))
+            print()
+            print()
+            print()
             #print(output.graph_info)
         return forward_hook
 
@@ -306,12 +337,27 @@ class PruneRatio_Checker:
                 self.visual_traverse(next_, graph, curid)
         
 
-    def visualization(self, filename='network', format='jpg'):
+    def visualization(self, filename='network', format='jpg', debug=False):
+        """
+        visualize the network architecture automaticlly.
+        Input:
+            filename: the filename of the saved image file
+            format: the output format
+            debug: if enable the debug mode
+        """
         import graphviz
         graph = graphviz.Digraph(format=format)
         self.visted.clear()
         graph_start = id(self.data)
         self.visual_traverse(graph_start, graph, None)
+        if debug:
+            # If enable debug, draw all available tensors in the same
+            # graph. It the network's architecture are seperated into
+            # two parts, we can easily and quickly find where the graph
+            # is broken, and find the missing hook point. 
+            for tid in self.tensors:
+                if tid not in self.visted:
+                    self.visual_traverse(tid, graph, None)
         graph.render(filename)
             
 
