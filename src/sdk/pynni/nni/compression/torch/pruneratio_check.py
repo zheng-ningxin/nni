@@ -33,8 +33,8 @@ class PruneRatio_Checker:
         torch_keys = ['flatten', 'squeeze', 'unsqueeze', 'cat']
         for attr in torch_keys:
             self.func_need_hook.append((torch, attr))
-        tensor_keys = [ 'view', '__add__', '__iadd__', 'flatten',
-                        'squeeze', 'unsqueeze', 'permute', 'contiguous']
+        tensor_keys = [ 'view', '__add__', '__iadd__', 'flatten', 'reshape',
+                        'squeeze', 'unsqueeze', 'permute', 'contiguous', 'mean']
         #tensor_keys = ['view', '__add__']
         for attr in tensor_keys:
             self.func_need_hook.append((torch.Tensor, attr))
@@ -312,7 +312,9 @@ class PruneRatio_Checker:
     def visual_traverse(self, curid, graph, last_visit):
         """"
         Input:
+            curid: the id of current visiting item(tensor/module)
             graph: the handle of the Dgraph
+            last_visit: the id of the last visited item
         """
 
         if curid in self.visted:
@@ -360,6 +362,17 @@ class PruneRatio_Checker:
                     self.visual_traverse(tid, graph, None)
         graph.render(filename)
             
-
-
+    def update_graph(self, data):
+        """
+            For the dynamic network architecture, in which, a 
+            single forward() may not converage all possible 
+            paths of the whole network, we also provide a 
+            interface for users to update the network architecture 
+            graph. If the data flows in a different way from before,
+            we will get the new paths and add them into existing 
+            graph.
+        """
+        self.deploy_hooks()
+        self.model(data)
+        self.remove_hooks()
     
