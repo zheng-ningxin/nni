@@ -14,10 +14,15 @@ class PyNode:
         self.isValue = isValue
         self.isTensor = False
         self.isOp = not self.isValue
-        if isValue:
+        if self.isValue:
             if isinstance(self.cnode.type(), torch._C.TensorType):
                 self.isTensor = True
                 self.shape = self.cnode.type().sizes()
+        if self.isOp:
+            self.name = cnode.scopeName()
+            # remove the __module prefix
+            if self.name.startswith('__module.'):
+                self.name = self.name[len('__module.'):]
 
     def __str__(self):
         if self.isTensor:
@@ -32,7 +37,12 @@ class PyNode:
         else:
             name = str(self.cnode.type())
         return name
-        
+    
+    def parents(self):
+        if self.isOp:
+            return list(self.cnode.inputs())
+        else:
+            return [self.cnode.node()]
 
 class Graph_Builder:
     def __init__(self, model, data):
