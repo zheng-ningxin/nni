@@ -40,7 +40,7 @@ class Prune_Check:
             parents = self.c2py[curnode].parents()
             for parent in parents:
                 if parent in self.c2py and (self.c2py[parent].isOp or 'Tensor' in str(parent.type())):
-                    # filter the scaler parameters of the functions
+                    # filter the scalar parameters of the functions
                     # only consider the Tensors/ List(Tensor)
                     queue.append(parent)
         return parent_convs
