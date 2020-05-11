@@ -3,6 +3,7 @@
 import os
 import torch
 import copy
+import json
 import numpy as np
 import torch.nn as nn
 from collections import OrderedDict
@@ -154,6 +155,18 @@ class SensitivityAnalysis:
             plt.close()
 
                 
+    def export(self, filepath):
+        """
+        Export the results of the sensitivity analysis
+        to a json file.
+
+        Parameters
+        ----------
+            filepath:
+                Path of the output file
+        """
+        with open(filepath, 'w') as jf:
+            json.dump(self.sensitivities, jf, indent=4)
 
     
     
