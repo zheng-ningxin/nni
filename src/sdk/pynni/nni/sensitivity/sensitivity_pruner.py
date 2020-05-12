@@ -6,27 +6,29 @@ import copy
 import json
 import torch
 import torch.nn as nn
+import sensitivity_analyze
 from sensitivity_analyze import SensitivityAnalysis
+from sensitivity_analyze import SUPPORTED_OP_TYPE
+from nni.compression.torch import L1FilterPruner
+from nni.compression.torch import L2FilterPruner
 
+MAX_PRUNE_RATIO_PER_ITER = 0.5
 
-class sensitivity_pruner:
-    def __init__(self, model, val_func, finetune_func, resume_frome=None):
+class SensitivityPruner:
+    def __init__(self, model, val_func, finetune_func=None, resume_frome=None):
         self.model = model
         self.val_func = val_func
         self.finetune_func = finetune_func
-        if not resume_frome:
-        # Sensitivity Analysis
-        # TODO: support loading the sensitivities from the json file
-            self.analyzer = SensitivityAnalysis(self.model, self.val_func)
-            self.sensitivities = self.analyzer.analysis()
-        else:
-            self.sensitivities = self.load_sensitivitis(resume_frome)
+        self.analyzer = SensitivityAnalysis(self.model, self.val_func)
+        self.resume_from = resume_frome
         # Get the original accuracy of the pretrained model
         self.ori_acc = self.val_func(self.model)
         # Copy the original weights before pruning
         self.ori_state_dict = copy.deepcopy(self.model.state_dict())
+        self.sensitivities = {}
         # Save the weight count for each layer
         self.weight_count = {}
+        self.weight_sum = 0
         # Map the layer name to the layer module
         self.named_module = {}
         for name, submodule in self.model.named_modules():
@@ -82,11 +84,110 @@ class sensitivity_pruner:
         return max_ratio
 
 
+    def normalize(self, ratios, target_pruned):
+        """
+        Normalize the prune ratio of each layer according to the
+        total already pruned ratio and the finnal target total prune 
+        ratio
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+
+        """
+        # TODO: filter out the very sensitive layers. Only prune the 
+        # layers that are not very sensitive
+        w_sum = 0
+        _Max = 0
+        for layername, ratio in ratios.items():
+            wcount = self.weight_count[layername]
+            w_sum += ratio * wcount * (1-self.analyzer.already_pruned[layername]) 
+        target_count = self.weight_sum * target_pruned
+        for layername in ratios:
+            ratios[layername] = ratios[layername] * target_count / w_sum
+            _Max = max(_Max, ratios[layername])
+        # Cannot Prune too much in a single iteration
+        # If a layer's prune ratio is larger than the 
+        # MAX_PRUNE_RATIO_PER_ITER we rescal all prune
+        # ratios under this threshold 
+        if _Max > MAX_PRUNE_RATIO_PER_ITER:
+            for layername in ratios:
+                ratios[layername] = ratios[layername] * MAX_PRUNE_RATIO_PER_ITER / _Max
+        return ratios 
+
+    def create_cfg(self, ratios):
+        """
+        """
+        cfg_list = []
+        for layername in ratios:
+            prune_ratio = ratios[layername]
+            remain = 1- self.analyzer.already_pruned[layername]
+            sparsity = remain * prune_ratio + self.analyzer.already_pruned[layername]
+            cfg = {'sparsity':sparsity, 'op_names':[layername], 'op_types':SUPPORTED_OP_TYPE}
+            cfg_list.append(cfg)
+        return cfg_list
+
+    def current_sparsity(self):
+        """
+        The sparisity of the weight.
+        """
+        pruned_weight = 0 
+        for layer_name in self.analyzer.already_pruned:
+            w_count = self.weight_count[layer_name]
+            prune_ratio = self.analyzer.already_pruned[layer_name]
+            pruned_weight += w_count * prune_ratio
+        return pruned_weight / self.weight_sum
+        
     def compress(self, target_ratio, ratio_step=0.1, threshold=0.05):
         """
         We iteratively prune the model according to the results of 
         the sensitivity analysis.
         
         """
-        ori_acc = self.ori_acc
+        if not self.resume_from:
+            # TODO: support loading the sensitivities from the json file
+            self.sensitivities = self.analyzer.analysis()
+        else:
+            self.sensitivities = self.load_sensitivitis(self.resume_from)
         
+        cur_ratio = 1.0
+        ori_acc = self.ori_acc
+        while cur_ratio > target_ratio:
+            # Each round have three steps:
+            # 1) Get the current sensitivity for each layer
+            # 2) Prune each layer according the sensitivies
+            # 3) finetune the model 
+
+            # Use the max prune ratio whose accuracy drop is smaller
+            # than the threshold(0.05) as the quantified sensitivity
+            # for each layer
+            # ps: the smaller the max_prune_ratio, more 
+            # sensitive the layer is
+            quantified = self._max_prune_ratio(ori_acc, threshold, self.sensitivities)
+            new_pruneratio = self.normalize(quantified, ratio_step)
+            cfg_list = self.create_cfg(new_pruneratio)
+            pruner = L1FilterPruner(self.model, cfg_list)
+            pruner.compress()
+            pruned_acc = self.val_func(self.model)
+            print('Accuracy after pruning:', pruned_acc)
+            self.finetune_func(self.model)
+            finetune_acc = self.val_func(self.model)
+            print('Accuracy after finetune:', finetune_acc)
+            ori_acc = finetune_acc
+            # unwrap the pruner
+            pruner._unwrap_model()
+            # update the already prune ratio of each layer befor the new
+            # sensitivity analysis
+            for layer_cfg in cfg_list:
+                name = layer_cfg['op_names'][0]
+                sparsity = layer_cfg['sparsity']
+                self.analyzer.already_pruned[name] = sparsity
+
+            self.analyzer.load_state_dict(self.model.state_dict())
+            self.sensitivities = self.analyzer.analysis()
+            # update the cur_ratio
+            cur_ratio = 1 - self.current_sparsity()
+            del pruner
+            

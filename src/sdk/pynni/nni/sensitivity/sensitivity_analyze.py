@@ -36,11 +36,16 @@ class SensitivityAnalysis:
         self.val_func = val_func
         self.ratio_step = ratio_step
         self.target_layer = OrderedDict()
-        self.ori_stat_dict = copy.deepcopy(self.model.state_dict())
+        self.ori_state_dict = copy.deepcopy(self.model.state_dict())
         self.target_layer = {}
         self.sensitivities = {} 
         self.model_parse()
-
+        # already_pruned is for the iterative sensitivity analysis
+        # For example, sensitivity_pruner iteratively prune the target
+        # model according to the sensitivity. After each round of
+        # pruning, the sensitivity_pruner will test the new sensitivity
+        # for each layer
+        self.already_pruned = {}
     @property
     def layers_count(self):
         return len(self.target_layer)
@@ -50,6 +55,7 @@ class SensitivityAnalysis:
             for op_type in SUPPORTED_OP_TYPE:
                 if isinstance(submodel, op_type):
                     self.target_layer[name] = submodel
+                    self.already_pruned[name] = 0
         
     def analysis(self, start=0, end=None, type='l1'):
         """
@@ -86,6 +92,8 @@ class SensitivityAnalysis:
             for prune_ratio in np.arange(self.ratio_step, 1.0, self.ratio_step):
                 print('PruneRatio: ', prune_ratio)
                 prune_ratio = np.round(prune_ratio, 2)
+                # Calculate the actual prune ratio based on the already pruned ratio
+                prune_ratio = (1.0 - self.already_pruned[name]) * prune_ratio + self.already_pruned[name]
                 cfg = [{ 'sparsity': prune_ratio, 'op_names': [name], 'op_types': ['Conv2d'] }]
                 pruner = L1FilterPruner(self.model, cfg)
                 pruner.compress()
@@ -93,7 +101,7 @@ class SensitivityAnalysis:
                 self.sensitivities[name][prune_ratio] = val_acc
                 pruner._unwrap_model()
                 # reset the weights pruned by the pruner
-                self.model.load_state_dict(self.ori_stat_dict)
+                self.model.load_state_dict(self.ori_state_dict)
                 #print('Reset')
                 #print(self.val_func(self.model))
                 del pruner         
@@ -167,6 +175,22 @@ class SensitivityAnalysis:
         """
         with open(filepath, 'w') as jf:
             json.dump(self.sensitivities, jf, indent=4)
+
+
+    def update_already_pruned(self, layername, ratio):
+        """
+        Set the already pruned ratio for the target layer.
+        """
+        self.already_pruned[layername] = ratio
+
+    def load_state_dict(self, state_dict):
+        """
+        Update the weight of the model
+        """
+        self.ori_state_dict = copy.deepcopy(state_dict)
+        self.model.load_state_dict(self.ori_state_dict)
+    
+    
 
     
     

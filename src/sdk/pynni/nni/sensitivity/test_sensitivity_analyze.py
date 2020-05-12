@@ -44,10 +44,10 @@ def val(model):
     
 
 if __name__ == '__main__':
-    net = models.resnet34(pretrained=True)
+    net = models.resnet18(pretrained=True)
     net.cuda()
     s_analyzer = SensitivityAnalysis(net, val, 0.1)
     sensitivity = s_analyzer.analysis()
     print(sensitivity)
-    with open('resnet34_sensitivity.json', 'w') as jf:
+    with open('resnet18_sensitivity.json', 'w') as jf:
         json.dump(sensitivity, jf)
