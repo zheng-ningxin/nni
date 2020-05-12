@@ -9,6 +9,7 @@ import torch.nn as nn
 import sensitivity_analyze
 from sensitivity_analyze import SensitivityAnalysis
 from sensitivity_analyze import SUPPORTED_OP_TYPE
+from sensitivity_analyze import SUPPORTED_OP_NAME
 from nni.compression.torch import L1FilterPruner
 from nni.compression.torch import L2FilterPruner
 
@@ -47,7 +48,7 @@ class SensitivityPruner:
             sensitivities = json.load(jf)
             # convert string type to float
             for name in sensitivities:
-                sensitivities[name] = { float(k): float(v) for k, v in sensitivities[name]}
+                sensitivities[name] = { float(k): float(v) for k, v in sensitivities[name].items()}
             return sensitivities
 
 
@@ -125,8 +126,10 @@ class SensitivityPruner:
             prune_ratio = ratios[layername]
             remain = 1- self.analyzer.already_pruned[layername]
             sparsity = remain * prune_ratio + self.analyzer.already_pruned[layername]
-            cfg = {'sparsity':sparsity, 'op_names':[layername], 'op_types':SUPPORTED_OP_TYPE}
-            cfg_list.append(cfg)
+            if sparsity > 0:
+                # Pruner does not allow the prune ratio to be zero
+                cfg = {'sparsity':sparsity, 'op_names':[layername], 'op_types':['Conv2d']}
+                cfg_list.append(cfg)
         return cfg_list
 
     def current_sparsity(self):
@@ -154,12 +157,14 @@ class SensitivityPruner:
         
         cur_ratio = 1.0
         ori_acc = self.ori_acc
+        # TODO: add a break out condition triggerd by the MAX_ITERATION
+        #
         while cur_ratio > target_ratio:
             # Each round have three steps:
             # 1) Get the current sensitivity for each layer
             # 2) Prune each layer according the sensitivies
             # 3) finetune the model 
-
+            print('Current remained ratio', cur_ratio)
             # Use the max prune ratio whose accuracy drop is smaller
             # than the threshold(0.05) as the quantified sensitivity
             # for each layer
@@ -168,6 +173,7 @@ class SensitivityPruner:
             quantified = self._max_prune_ratio(ori_acc, threshold, self.sensitivities)
             new_pruneratio = self.normalize(quantified, ratio_step)
             cfg_list = self.create_cfg(new_pruneratio)
+            print(cfg_list)
             pruner = L1FilterPruner(self.model, cfg_list)
             pruner.compress()
             pruned_acc = self.val_func(self.model)
@@ -190,4 +196,6 @@ class SensitivityPruner:
             # update the cur_ratio
             cur_ratio = 1 - self.current_sparsity()
             del pruner
+        
+        return self.model
             

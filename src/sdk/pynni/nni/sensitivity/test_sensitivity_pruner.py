@@ -15,7 +15,7 @@ from sensitivity_pruner import SensitivityPruner
 
 train_dir = '/mnt/imagenet/raw_jpeg/2012/train/'
 val_dir = '/mnt/imagenet/raw_jpeg/2012/val/'
-lr = 0.01
+lr = 0.001
 
 criterion = nn.CrossEntropyLoss()
 batch_size = 64
@@ -71,6 +71,8 @@ def train(model):
     total = 0
     correct = 0
     for batchid, (data, lable) in enumerate(train_loader):
+        if batchid > 1000:
+            break
         data, lable = data.cuda(), lable.cuda()
         optimizer.zero_grad()
         out = model(data)
@@ -87,8 +89,6 @@ def train(model):
 if __name__ == '__main__':
     net = models.resnet18(pretrained=True)
     net.cuda()
-    pruner = (net, val, 0.1)
-    sensitivity = s_analyzer.analysis()
-    print(sensitivity)
-    with open('resnet18_sensitivity.json', 'w') as jf:
-        json.dump(sensitivity, jf)
+    pruner = SensitivityPruner(net, val, train , 'resnet18_sensitivity.json')
+    net = pruner.compress(0.5)
+    

@@ -39,13 +39,13 @@ class SensitivityAnalysis:
         self.ori_state_dict = copy.deepcopy(self.model.state_dict())
         self.target_layer = {}
         self.sensitivities = {} 
-        self.model_parse()
         # already_pruned is for the iterative sensitivity analysis
         # For example, sensitivity_pruner iteratively prune the target
         # model according to the sensitivity. After each round of
         # pruning, the sensitivity_pruner will test the new sensitivity
         # for each layer
         self.already_pruned = {}
+        self.model_parse()
     @property
     def layers_count(self):
         return len(self.target_layer)
