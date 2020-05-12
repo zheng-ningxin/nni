@@ -33,7 +33,12 @@ class SensitivityPruner:
         self.named_module = {}
         for name, submodule in self.model.named_modules():
             self.named_module[name] = submodule
-            if hasattr(submodule, 'weight'):
+            if name in self.analyzer.target_layer:
+                # Currnetly, only count the weights in the conv layers
+                # else the fully connected layer (which contains
+                # the most weights) may make the pruner prune the 
+                # model too hard
+            # if hasattr(submodule, 'weight'): # Count all the weights of the model
                 self.weight_count[name] = submodule.weight.data.numel()
                 self.weight_sum += self.weight_count[name]
 
@@ -92,9 +97,16 @@ class SensitivityPruner:
 
         Parameters
         ----------
-
+            ratios:
+                Dict object that save the prune ratio for each layer
+            target_pruned:
+                The amount of the weights expected to be pruned in this
+                iteration
+            
         Returns
         -------
+            new_ratios:
+                return the normalized prune ratios for each layer.
 
         """
         # TODO: filter out the very sensitive layers. Only prune the 
@@ -119,6 +131,17 @@ class SensitivityPruner:
 
     def create_cfg(self, ratios):
         """
+        Generate the cfg_list for the pruner according to the prune ratios.
+
+        Parameters
+        ---------
+            ratios:
+                For example: {'conv1' : 0.2}
+
+        Returns
+        -------
+            cfg_list:
+                For example: [{'sparsity':0.2, 'op_names':['conv1'], 'op_types':['Conv2d']}]
         """
         cfg_list = []
         for layername in ratios:
@@ -201,7 +224,7 @@ class SensitivityPruner:
             # update the cur_ratio
             cur_ratio = 1 - self.current_sparsity()
             del pruner
-        print('After Pruning %.2f% weights remains' % cur_ratio*100)    
+        print('After Pruning %.2f weights remains' % cur_ratio*100)    
         return self.model
 
     def export(self, model_path, pruner_path=None):
