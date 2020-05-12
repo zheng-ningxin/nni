@@ -6,10 +6,9 @@ import copy
 import json
 import torch
 import torch.nn as nn
-import sensitivity_analyze
-from sensitivity_analyze import SensitivityAnalysis
-from sensitivity_analyze import SUPPORTED_OP_TYPE
-from sensitivity_analyze import SUPPORTED_OP_NAME
+from .sensitivity_analyze import SensitivityAnalysis
+from .sensitivity_analyze import SUPPORTED_OP_TYPE
+from .sensitivity_analyze import SUPPORTED_OP_NAME
 from nni.compression.torch import L1FilterPruner
 from nni.compression.torch import L2FilterPruner
 
@@ -116,7 +115,7 @@ class SensitivityPruner:
         if _Max > MAX_PRUNE_RATIO_PER_ITER:
             for layername in ratios:
                 ratios[layername] = ratios[layername] * MAX_PRUNE_RATIO_PER_ITER / _Max
-        return ratios 
+        return ratios
 
     def create_cfg(self, ratios):
         """
@@ -143,7 +142,7 @@ class SensitivityPruner:
             pruned_weight += w_count * prune_ratio
         return pruned_weight / self.weight_sum
         
-    def compress(self, target_ratio, ratio_step=0.1, threshold=0.05):
+    def compress(self, target_ratio, ratio_step=0.1, threshold=0.05, MAX_ITERATION=None):
         """
         We iteratively prune the model according to the results of 
         the sensitivity analysis.
@@ -157,13 +156,16 @@ class SensitivityPruner:
         
         cur_ratio = 1.0
         ori_acc = self.ori_acc
-        # TODO: add a break out condition triggerd by the MAX_ITERATION
-        #
+        iteration_count = 0
+        
         while cur_ratio > target_ratio:
+            iteration_count += 1
+            if MAX_ITERATION is not None and iteration_count > MAX_ITERATION:
+                break
             # Each round have three steps:
             # 1) Get the current sensitivity for each layer
             # 2) Prune each layer according the sensitivies
-            # 3) finetune the model 
+            # 3) finetune the model
             print('Current remained ratio', cur_ratio)
             # Use the max prune ratio whose accuracy drop is smaller
             # than the threshold(0.05) as the quantified sensitivity
@@ -178,6 +180,7 @@ class SensitivityPruner:
             pruner.compress()
             pruned_acc = self.val_func(self.model)
             print('Accuracy after pruning:', pruned_acc)
+            # TODO: support the multiple parameters for the fine_tune function
             self.finetune_func(self.model)
             finetune_acc = self.val_func(self.model)
             print('Accuracy after finetune:', finetune_acc)
@@ -196,6 +199,26 @@ class SensitivityPruner:
             # update the cur_ratio
             cur_ratio = 1 - self.current_sparsity()
             del pruner
-        
+            
         return self.model
+
+    def export(self, model_path, pruner_path=None):
+        """
+        Export the pruned results of the target model.
+
+        Parameters
+        ----------
+            model_path:
+                Path of the checkpoint of the pruned model.
+            pruner_path:
+                If not none, save the config of the pruner to this file.
+        """
+        torch.save(self.model.state_dict(), model_path)
+        if pruner_path is not None:
+            sparsity_ratios = {}
+            for layername in self.analyzer.already_pruned:
+                sparsity_ratios[layername] = self.analyzer.already_pruned[layername]
+                cfg_list = self.create_cfg(sparsity_ratios)
+            with open(pruner_path, 'w') as pf:
+                json.dump(cfg_list, pf)
             
