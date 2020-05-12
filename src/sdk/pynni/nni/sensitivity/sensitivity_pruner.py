@@ -193,13 +193,15 @@ class SensitivityPruner:
                 name = layer_cfg['op_names'][0]
                 sparsity = layer_cfg['sparsity']
                 self.analyzer.already_pruned[name] = sparsity
-
-            self.analyzer.load_state_dict(self.model.state_dict())
-            self.sensitivities = self.analyzer.analysis()
+            if MAX_ITERATION is not None and iteration_count < MAX_ITERATION:
+                # If this is the last prune iteration, skip the time-consuming
+                # sensitivity analysis
+                self.analyzer.load_state_dict(self.model.state_dict())
+                self.sensitivities = self.analyzer.analysis()
             # update the cur_ratio
             cur_ratio = 1 - self.current_sparsity()
             del pruner
-            
+        print('After Pruning %.2f% weights remains' % cur_ratio*100)    
         return self.model
 
     def export(self, model_path, pruner_path=None):
