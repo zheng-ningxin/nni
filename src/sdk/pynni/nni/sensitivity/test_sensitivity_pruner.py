@@ -117,4 +117,5 @@ if __name__ == '__main__':
                           ratio_step=args.ratio_step, MAX_ITERATION=args.maxiter)
     model_file = os.path.join(args.outdir, 'resnet18_sensitivity_prune.pth')
     pruner_cfg_file = os.path.join(args.outdir, 'resnet18_pruner.json')
+    os.makedirs(args.outdir, exist_ok=True)
     pruner.export(model_file, pruner_cfg_file)
