@@ -5,13 +5,14 @@ import json
 import torch.nn as nn
 import torchvision 
 import torchvision.models as models
-import sensitivity_analyze 
-from sensitivity_analyze import SensitivityAnalysis
+#import sensitivity_analyze 
+from .sensitivity_analyze import SensitivityAnalysis
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torch.optim as optim
-import sensitivity_pruner
-from sensitivity_pruner import SensitivityPruner
+#import sensitivity_pruner
+from .sensitivity_pruner import SensitivityPruner
+import argparse
 
 train_dir = '/mnt/imagenet/raw_jpeg/2012/train/'
 val_dir = '/mnt/imagenet/raw_jpeg/2012/val/'
@@ -87,8 +88,13 @@ def train(model):
         print('Batch %d Loss:%.3f Acc:%.3f' % (batchid, total_loss/(batchid+1), correct/total))
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--resume', help='resume from the sensitivity results')
+    args = parser.parse_args()
     net = models.resnet18(pretrained=True)
     net.cuda()
-    pruner = SensitivityPruner(net, val, train , 'resnet18_sensitivity.json')
-    net = pruner.compress(0.5)
+    # pruner = SensitivityPruner(net, val, train , 'resnet18_sensitivity.json')
+    pruner = SensitivityPruner(net, val, train, args.resume)
+    net = pruner.compress(0.5, MAX_ITERATION=2)
+    pruner.export('resnet18_sensitivity_prune.pth', 'resnet18_pruner.json')
     

@@ -1,6 +1,5 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
-
 import os
 import copy
 import json
@@ -224,7 +223,7 @@ class SensitivityPruner:
             # update the cur_ratio
             cur_ratio = 1 - self.current_sparsity()
             del pruner
-        print('After Pruning %.2f weights remains' % cur_ratio*100)    
+        print('After Pruning: %.2f weights remains' % cur_ratio)    
         return self.model
 
     def export(self, model_path, pruner_path=None):
