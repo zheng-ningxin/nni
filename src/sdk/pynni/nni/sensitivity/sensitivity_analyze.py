@@ -13,8 +13,9 @@ from nni.compression.torch import L1FilterPruner
 from nni.compression.torch import L2FilterPruner
 
 
-SUPPORTED_OP_NAME = [ 'Conv2d', 'Conv1d' ]
-SUPPORTED_OP_TYPE = [ getattr(nn, name) for name in SUPPORTED_OP_NAME ]
+SUPPORTED_OP_NAME = ['Conv2d', 'Conv1d']
+SUPPORTED_OP_TYPE = [getattr(nn, name) for name in SUPPORTED_OP_NAME]
+
 
 class SensitivityAnalysis:
     def __init__(self, model, val_func, ratio_step=0.1):
@@ -39,7 +40,7 @@ class SensitivityAnalysis:
         self.target_layer = OrderedDict()
         self.ori_state_dict = copy.deepcopy(self.model.state_dict())
         self.target_layer = {}
-        self.sensitivities = {} 
+        self.sensitivities = {}
         # already_pruned is for the iterative sensitivity analysis
         # For example, sensitivity_pruner iteratively prune the target
         # model according to the sensitivity. After each round of
@@ -47,6 +48,7 @@ class SensitivityAnalysis:
         # for each layer
         self.already_pruned = {}
         self.model_parse()
+
     @property
     def layers_count(self):
         return len(self.target_layer)
@@ -57,7 +59,7 @@ class SensitivityAnalysis:
                 if isinstance(submodel, op_type):
                     self.target_layer[name] = submodel
                     self.already_pruned[name] = 0
-        
+
     def analysis(self, start=0, end=None, type='l1'):
         """
         This function analyze the sensitivity to pruning for 
@@ -85,17 +87,19 @@ class SensitivityAnalysis:
         if not end:
             end = self.layers_count
         assert start >= 0 and end <= self.layers_count
-        assert start <= end    
+        assert start <= end
         namelist = list(self.target_layer.keys())
         for layerid in range(start, end):
             name = namelist[layerid]
-            self.sensitivities[name] = {} 
+            self.sensitivities[name] = {}
             for prune_ratio in np.arange(self.ratio_step, 1.0, self.ratio_step):
                 print('PruneRatio: ', prune_ratio)
                 prune_ratio = np.round(prune_ratio, 2)
                 # Calculate the actual prune ratio based on the already pruned ratio
-                prune_ratio = (1.0 - self.already_pruned[name]) * prune_ratio + self.already_pruned[name]
-                cfg = [{ 'sparsity': prune_ratio, 'op_names': [name], 'op_types': ['Conv2d'] }]
+                prune_ratio = (
+                    1.0 - self.already_pruned[name]) * prune_ratio + self.already_pruned[name]
+                cfg = [{'sparsity': prune_ratio, 'op_names': [
+                    name], 'op_types': ['Conv2d']}]
                 pruner = L1FilterPruner(self.model, cfg)
                 pruner.compress()
                 val_acc = self.val_func(self.model)
@@ -103,11 +107,11 @@ class SensitivityAnalysis:
                 pruner._unwrap_model()
                 # reset the weights pruned by the pruner
                 self.model.load_state_dict(self.ori_state_dict)
-                #print('Reset')
-                #print(self.val_func(self.model))
-                del pruner         
+                # print('Reset')
+                # print(self.val_func(self.model))
+                del pruner
         return self.sensitivities
-                
+
     def visualization(self, outdir, merge=False):
         """
         Visualize the sensitivity curves of the model
@@ -151,19 +155,18 @@ class SensitivityAnalysis:
                 X = list(self.sensitivities[name].keys())
                 X = sorted(X)
                 Y = [self.sensitivities[name][x] for x in X]
-                linestyle = LineStyles[ styleid % len(LineStyles) ]
-                marker = Markers[ styleid % len(Markers)]
-                plt.plot(X, Y, label=name, linestyle=linestyle, marker=marker)  
+                linestyle = LineStyles[styleid % len(LineStyles)]
+                marker = Markers[styleid % len(Markers)]
+                plt.plot(X, Y, label=name, linestyle=linestyle, marker=marker)
                 plt.xlabel('Prune Ratio')
                 plt.ylabel('Validation Accuracy')
                 plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
                 plt.tight_layout()
-                filepath = os.path.join(outdir, 'all.jpg') 
+                filepath = os.path.join(outdir, 'all.jpg')
                 plt.savefig(filepath, dpi=1000, bbox_inches='tight')
                 styleid += 1
             plt.close()
 
-                
     def export(self, filepath):
         """
         Export the results of the sensitivity analysis
@@ -177,7 +180,6 @@ class SensitivityAnalysis:
         with open(filepath, 'w') as jf:
             json.dump(self.sensitivities, jf, indent=4)
 
-
     def update_already_pruned(self, layername, ratio):
         """
         Set the already pruned ratio for the target layer.
@@ -190,8 +192,3 @@ class SensitivityAnalysis:
         """
         self.ori_state_dict = copy.deepcopy(state_dict)
         self.model.load_state_dict(self.ori_state_dict)
-    
-    
-
-    
-    
