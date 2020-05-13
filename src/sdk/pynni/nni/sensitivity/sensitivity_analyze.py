@@ -19,6 +19,8 @@ SUPPORTED_OP_TYPE = [getattr(nn, name) for name in SUPPORTED_OP_NAME]
 
 class SensitivityAnalysis:
     def __init__(self, model, val_func, ratio_step=0.1):
+        # TODO Speedup by ratio_threshold or list 
+        # TODO l1 or l2 seted here
         """
         Perform sensitivity analysis for this model.
         Parameters
@@ -105,6 +107,7 @@ class SensitivityAnalysis:
                 val_acc = self.val_func(self.model)
                 self.sensitivities[name][prune_ratio] = val_acc
                 pruner._unwrap_model()
+                # TODO outside the ratio loop
                 # reset the weights pruned by the pruner
                 self.model.load_state_dict(self.ori_state_dict)
                 # print('Reset')
@@ -114,6 +117,7 @@ class SensitivityAnalysis:
 
     def visualization(self, outdir, merge=False):
         """
+        # 
         Visualize the sensitivity curves of the model
 
         Parameters
@@ -169,6 +173,7 @@ class SensitivityAnalysis:
 
     def export(self, filepath):
         """
+        #TODO CSV
         Export the results of the sensitivity analysis
         to a json file.
 
@@ -177,6 +182,7 @@ class SensitivityAnalysis:
             filepath:
                 Path of the output file
         """
+        # TODO csv
         with open(filepath, 'w') as jf:
             json.dump(self.sensitivities, jf, indent=4)
 

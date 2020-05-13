@@ -56,6 +56,7 @@ class SensitivityPruner:
             return sensitivities
 
     def _max_prune_ratio(self, ori_acc, threshold, sensitivities):
+        # TODO as default, provide customerize lambda function  quantified (sensi)
         """
         Find the maximum prune ratio for a single layer whose accuracy 
         drop is lower than the threshold.
