@@ -152,7 +152,8 @@ class SensitivityPruner:
                 self.analyzer.already_pruned[layername]
             if sparsity > 0:
                 # Pruner does not allow the prune ratio to be zero
-                cfg = {'sparsity': sparsity, 'op_names': [layername], 'op_types': ['Conv2d']}
+                cfg = {'sparsity': sparsity, 'op_names': [
+                    layername], 'op_types': ['Conv2d']}
                 cfg_list.append(cfg)
         return cfg_list
 
@@ -167,7 +168,7 @@ class SensitivityPruner:
             pruned_weight += w_count * prune_ratio
         return pruned_weight / self.weight_sum
 
-    def compress(self, target_ratio, ratio_step=0.1, threshold=0.05, MAX_ITERATION=None):
+    def compress(self, target_ratio, ratio_step=0.1, threshold=0.05, MAX_ITERATION=None, checkpoint_dir=None):
         """
         We iteratively prune the model according to the results of 
         the sensitivity analysis.
@@ -182,7 +183,8 @@ class SensitivityPruner:
         cur_ratio = 1.0
         ori_acc = self.ori_acc
         iteration_count = 0
-
+        if checkpoint_dir is not None:
+            os.makedirs(checkpoint_dir, exist_ok=True)
         while cur_ratio > target_ratio:
             iteration_count += 1
             if MAX_ITERATION is not None and iteration_count > MAX_ITERATION:
@@ -229,7 +231,14 @@ class SensitivityPruner:
                 self.analyzer.load_state_dict(self.model.state_dict())
                 self.sensitivities = self.analyzer.analysis()
             # update the cur_ratio
-
+            if checkpoint_dir is not None:
+                checkpoint_name = 'Iter_%d_finetune_acc_%.3f_sparsity_%.2f' % (
+                    iteration_count, finetune_acc, cur_ratio)
+                checkpoint_path = os.path.join(checkpoint_dir, '%s.pth' % checkpoint_name)
+                cfg_path = os.path.join(checkpoint_dir, '%s_pruner.json'% checkpoint_name)
+                torch.save(self.model.state_dict(), checkpoint_path)
+                with open(cfg_path, 'w') as jf:
+                    json.dump(cfg_list, jf)
         print('After Pruning: %.2f weights remains' % cur_ratio)
         return self.model
 
