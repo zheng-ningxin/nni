@@ -17,7 +17,7 @@ import argparse
 
 train_dir = '/mnt/imagenet/raw_jpeg/2012/train/'
 val_dir = '/mnt/imagenet/raw_jpeg/2012/val/'
-lr = 0.001
+lr = 0.002
 
 criterion = nn.CrossEntropyLoss()
 batch_size = 64
@@ -70,26 +70,30 @@ def val(model):
 def train(model):
     optimizer = optim.SGD(model.parameters(), lr=lr,
                           momentum=0.9, weight_decay=5e-4)
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     model.train()
-    total_loss = 0
-    total = 0
-    correct = 0
-    for batchid, (data, lable) in enumerate(train_loader):
-        if batchid > 1000:
-            break
-        data, lable = data.cuda(), lable.cuda()
-        optimizer.zero_grad()
-        out = model(data)
-        loss = criterion(out, lable)
-        loss.backward()
-        optimizer.step()
+    for epochid in range(5):    
+        total_loss = 0
+        total = 0
+        correct = 0
+        for batchid, (data, lable) in enumerate(train_loader):
+            if batchid > 1000:
+                break
+            data, lable = data.cuda(), lable.cuda()
+            optimizer.zero_grad()
+            out = model(data)
+            loss = criterion(out, lable)
+            loss.backward()
+            optimizer.step()
 
-        total_loss += loss.item()
-        _, predicted = out.max(1)
-        correct += predicted.eq(lable).sum().item()
-        total += lable.size(0)
-        print('Batch %d Loss:%.3f Acc:%.3f' %
-              (batchid, total_loss/(batchid+1), correct/total))
+            total_loss += loss.item()
+            _, predicted = out.max(1)
+            correct += predicted.eq(lable).sum().item()
+            total += lable.size(0)
+            if batchid % 100 == 0:
+                print('Epoch%d Batch %d Loss:%.3f Acc:%.3f' %
+                    (epochid, batchid, total_loss/(batchid+1), correct/total))
+        lr_scheduler.step()
 
 
 if __name__ == '__main__':

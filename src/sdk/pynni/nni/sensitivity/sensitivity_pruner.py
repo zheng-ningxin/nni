@@ -191,6 +191,7 @@ class SensitivityPruner:
             # 1) Get the current sensitivity for each layer
             # 2) Prune each layer according the sensitivies
             # 3) finetune the model
+            print('Current base accuracy', ori_acc)
             print('Current remained ratio', cur_ratio)
             # Use the max prune ratio whose accuracy drop is smaller
             # than the threshold(0.05) as the quantified sensitivity
@@ -219,14 +220,16 @@ class SensitivityPruner:
                 name = layer_cfg['op_names'][0]
                 sparsity = layer_cfg['sparsity']
                 self.analyzer.already_pruned[name] = sparsity
+            cur_ratio = 1 - self.current_sparsity()
+            del pruner
+            print('Currently Remained ratio:', cur_ratio)
             if MAX_ITERATION is not None and iteration_count < MAX_ITERATION:
                 # If this is the last prune iteration, skip the time-consuming
                 # sensitivity analysis
                 self.analyzer.load_state_dict(self.model.state_dict())
                 self.sensitivities = self.analyzer.analysis()
             # update the cur_ratio
-            cur_ratio = 1 - self.current_sparsity()
-            del pruner
+
         print('After Pruning: %.2f weights remains' % cur_ratio)
         return self.model
 

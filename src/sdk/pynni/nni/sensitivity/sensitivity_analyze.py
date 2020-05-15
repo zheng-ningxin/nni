@@ -18,7 +18,7 @@ SUPPORTED_OP_TYPE = [getattr(nn, name) for name in SUPPORTED_OP_NAME]
 
 
 class SensitivityAnalysis:
-    def __init__(self, model, val_func, ratio_step=0.1):
+    def __init__(self, model, val_func, ratio_step=0.1, early_step=0.2):
         # TODO Speedup by ratio_threshold or list 
         # TODO l1 or l2 seted here
         """
@@ -50,6 +50,7 @@ class SensitivityAnalysis:
         # for each layer
         self.already_pruned = {}
         self.model_parse()
+        self.early_stop = early_step
 
     @property
     def layers_count(self):
@@ -90,6 +91,7 @@ class SensitivityAnalysis:
             end = self.layers_count
         assert start >= 0 and end <= self.layers_count
         assert start <= end
+        ori_acc = self.val_func(self.model)
         namelist = list(self.target_layer.keys())
         for layerid in range(start, end):
             name = namelist[layerid]
@@ -113,6 +115,9 @@ class SensitivityAnalysis:
                 # print('Reset')
                 # print(self.val_func(self.model))
                 del pruner
+                if val_acc + self.early_stop < ori_acc:
+                    break
+                ori_acc = val_acc
         return self.sensitivities
 
     def visualization(self, outdir, merge=False):
