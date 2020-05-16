@@ -15,12 +15,29 @@ import torch.optim as optim
 from .sensitivity_pruner import SensitivityPruner
 import argparse
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--resume', default=None,
+                    help='resume from the sensitivity results')
+parser.add_argument('--outdir', help='save the result in this directory')
+parser.add_argument('--target_ratio', type=float, default=0.5,
+                    help='Target ratio of the remained weights compared to the original model')
+parser.add_argument('--maxiter', type=int, default=None,
+                    help='max iteration of the sentivity pruning')
+parser.add_argument('--ratio_step', type=float, default=0.1,
+                    help='the amount of the pruned weight in each prune iteration')
+parser.add_argument('--threshold', type=float, default=0.05,
+                    help='The accuracy drop threshold during the sensitivity analysis')
+parser.add_argument('--finetune_epoch', type=int, default=1, help='the number of epochs for finetune')
+parser.add_argument('--lr', type=float, default=1e-3, help='Learing rate for finetune')
+args = parser.parse_args()
+
 train_dir = '/mnt/imagenet/raw_jpeg/2012/train/'
 val_dir = '/mnt/imagenet/raw_jpeg/2012/val/'
-lr = 0.002
+
 
 criterion = nn.CrossEntropyLoss()
-batch_size = 64
+batch_size = 128
 imagenet_tran_train = [
     transforms.RandomResizedCrop(224, scale=(0.2, 1.0)),
     transforms.RandomHorizontalFlip(),
@@ -68,11 +85,11 @@ def val(model):
 
 
 def train(model):
-    optimizer = optim.SGD(model.parameters(), lr=lr,
-                          momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr,
+                          momentum=0.9, weight_decay=4e-5)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
     model.train()
-    for epochid in range(5):    
+    for epochid in range(args.finetune_epoch):    
         total_loss = 0
         total = 0
         correct = 0
@@ -91,25 +108,14 @@ def train(model):
             correct += predicted.eq(lable).sum().item()
             total += lable.size(0)
             if batchid % 100 == 0:
-                print('Epoch%d Batch %d Loss:%.3f Acc:%.3f' %
-                    (epochid, batchid, total_loss/(batchid+1), correct/total))
+                print('Epoch%d Batch %d Loss:%.3f Acc:%.3f LR:%f' %
+                    (epochid, batchid, total_loss/(batchid+1), correct/total, lr_scheduler.get_lr()[0]))
         lr_scheduler.step()
+        val(model)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--resume', default=None,
-                        help='resume from the sensitivity results')
-    parser.add_argument('--outdir', help='save the result in this directory')
-    parser.add_argument('--target_ratio', type=float, default=0.5,
-                        help='Target ratio of the remained weights compared to the original model')
-    parser.add_argument('--maxiter', type=int, default=None,
-                        help='max iteration of the sentivity pruning')
-    parser.add_argument('--ratio_step', type=float, default=0.1,
-                        help='the amount of the pruned weight in each prune iteration')
-    parser.add_argument('--threshold', type=float, default=0.05,
-                        help='The accuracy drop threshold during the sensitivity analysis')
-    args = parser.parse_args()
+
     net = models.resnet18(pretrained=True)
     net.cuda()
     # pruner = SensitivityPruner(net, val, train , 'resnet18_sensitivity.json')
@@ -117,6 +123,7 @@ if __name__ == '__main__':
         pruner = SensitivityPruner(net, val, train, args.resume)
     else:
         pruner = SensitivityPruner(net, val, train)
+
     net = pruner.compress(args.target_ratio, threshold=args.threshold,
                           ratio_step=args.ratio_step, MAX_ITERATION=args.maxiter)
     model_file = os.path.join(args.outdir, 'resnet18_sensitivity_prune.pth')
