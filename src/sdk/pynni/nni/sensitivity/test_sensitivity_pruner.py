@@ -125,7 +125,7 @@ if __name__ == '__main__':
         pruner = SensitivityPruner(net, val, train)
 
     net = pruner.compress(args.target_ratio, threshold=args.threshold,
-                          ratio_step=args.ratio_step, MAX_ITERATION=args.maxiter)
+                          ratio_step=args.ratio_step, MAX_ITERATION=args.maxiter, checkpoint_dir=args.outdir)
     model_file = os.path.join(args.outdir, 'resnet18_sensitivity_prune.pth')
     pruner_cfg_file = os.path.join(args.outdir, 'resnet18_pruner.json')
     os.makedirs(args.outdir, exist_ok=True)
