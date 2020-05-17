@@ -116,6 +116,7 @@ def train(model):
         val(model)
 
 from nni.compression.torch import L1FilterPruner
+import copy
 if __name__ == '__main__':
 
     net = models.resnet18(pretrained=True)
