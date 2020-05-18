@@ -56,12 +56,12 @@ imagenet_tran_test = [
 train_loader = torch.utils.data.DataLoader(
     datasets.ImageFolder(train_dir, transforms.Compose(imagenet_tran_train)),
     batch_size=batch_size, shuffle=True,
-    num_workers=4, pin_memory=True, sampler=None)
+    num_workers=12, pin_memory=True, sampler=None)
 
 val_loader = torch.utils.data.DataLoader(
     datasets.ImageFolder(val_dir, transforms.Compose(imagenet_tran_test)),
     batch_size=128, shuffle=False,
-    num_workers=4, pin_memory=True)
+    num_workers=12, pin_memory=True)
 
 
 def val(model):
@@ -116,7 +116,7 @@ def train(model):
 
 if __name__ == '__main__':
 
-    net = models.resnet18(pretrained=True)
+    net = models.resnet34(pretrained=True)
     net.cuda()
     # pruner = SensitivityPruner(net, val, train , 'resnet18_sensitivity.json')
     if args.resume:
@@ -126,7 +126,7 @@ if __name__ == '__main__':
 
     net = pruner.compress(args.target_ratio, threshold=args.threshold,
                           ratio_step=args.ratio_step, MAX_ITERATION=args.maxiter, checkpoint_dir=args.outdir)
-    model_file = os.path.join(args.outdir, 'resnet18_sensitivity_prune.pth')
-    pruner_cfg_file = os.path.join(args.outdir, 'resnet18_pruner.json')
+    model_file = os.path.join(args.outdir, 'resnet34_sensitivity_prune.pth')
+    pruner_cfg_file = os.path.join(args.outdir, 'resnet34_pruner.json')
     os.makedirs(args.outdir, exist_ok=True)
     pruner.export(model_file, pruner_cfg_file)

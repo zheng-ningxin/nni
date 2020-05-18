@@ -9,27 +9,16 @@ import torch.nn as nn
 import torchvision
 import torchvision.models as models
 #import sensitivity_analyze
-from .sensitivity_analyze import SensitivityAnalysis
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torch.optim as optim
 #import sensitivity_pruner
-from .sensitivity_pruner import SensitivityPruner
 import argparse
-
+import numpy as np
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--resume', default=None,
-                    help='resume from the sensitivity results')
+
 parser.add_argument('--outdir', help='save the result in this directory')
-parser.add_argument('--target_ratio', type=float, default=0.5,
-                    help='Target ratio of the remained weights compared to the original model')
-parser.add_argument('--maxiter', type=int, default=None,
-                    help='max iteration of the sentivity pruning')
-parser.add_argument('--ratio_step', type=float, default=0.1,
-                    help='the amount of the pruned weight in each prune iteration')
-parser.add_argument('--threshold', type=float, default=0.05,
-                    help='The accuracy drop threshold during the sensitivity analysis')
 parser.add_argument('--finetune_epoch', type=int, default=1, help='the number of epochs for finetune')
 parser.add_argument('--lr', type=float, default=1e-3, help='Learing rate for finetune')
 args = parser.parse_args()
@@ -58,12 +47,12 @@ imagenet_tran_test = [
 train_loader = torch.utils.data.DataLoader(
     datasets.ImageFolder(train_dir, transforms.Compose(imagenet_tran_train)),
     batch_size=batch_size, shuffle=True,
-    num_workers=4, pin_memory=True, sampler=None)
+    num_workers=12, pin_memory=True, sampler=None)
 
 val_loader = torch.utils.data.DataLoader(
     datasets.ImageFolder(val_dir, transforms.Compose(imagenet_tran_test)),
     batch_size=128, shuffle=False,
-    num_workers=4, pin_memory=True)
+    num_workers=12, pin_memory=True)
 
 
 def val(model):
@@ -119,11 +108,11 @@ from nni.compression.torch import L1FilterPruner
 import copy
 if __name__ == '__main__':
 
-    net = models.resnet18(pretrained=True)
+    net = models.resnet34(pretrained=True)
     net.cuda()
     # pruner = SensitivityPruner(net, val, train , 'resnet18_sensitivity.json')
     ori_stat_dict = copy.deepcopy(net.state_dict())
-    for ratio in np.arange(0.1, 1.0, 0.1):
+    for ratio in np.arange(0.1, 0.6, 0.1):
         ratio = np.round(ratio, 2)
         cfg = [{'sparsity' : ratio, 'op_types':['Conv2d']}]
         pruner = L1FilterPruner(net, cfg)
