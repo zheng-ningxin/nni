@@ -80,6 +80,7 @@ def val(model):
             total += data.size(0)
             correct += predicted.eq(label).sum().item()
             # return correct / total
+    print('Loss: ', total_loss/(batchid+1))
     print('Accuracy: ', correct / total)
     return correct / total
 

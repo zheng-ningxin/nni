@@ -3,6 +3,7 @@
 import os
 import copy
 import json
+import logging
 import torch
 import torch.nn as nn
 from .sensitivity_analyze import SensitivityAnalysis
@@ -12,17 +13,43 @@ from nni.compression.torch import L1FilterPruner
 from nni.compression.torch import L2FilterPruner
 
 MAX_PRUNE_RATIO_PER_ITER = 0.95
-
+logger = logging.getLogger('Sensitivity_Pruner')
+# logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 class SensitivityPruner:
-    def __init__(self, model, val_func, finetune_func=None, resume_frome=None):
+    def __init__(self, model, val_func, finetune_func=None, resume_frome=None, sparsity_proportion_calc=None):
+        """
+        Parameters
+        ----------
+            model:
+                model to be compressed
+            val_function:
+                validation function for the model. This function should return the accuracy
+                of the validation dataset.
+            finetune_func:
+                finetune function for the model. This parameter is not essential, if is not None, 
+                the sensitivity pruner will finetune the model after pruning in each iteration.
+            resume_from:
+                resume the sensitivity results from this file. In the one shot pruning mode(in which
+                the maximum iteration is set to 1), user can avoid the repeated sensitivity analysis 
+                for the same model.
+            sparsity_proportion_calc:
+                This function generate the sparsity proportion between the conv layers according to the
+                sensitivity analysis results. The input of this function is a dict, for example :
+                {'conv1' : {0.1: 0.9, 0.2 : 0.8}, 'conv2' : {0.1: 0.9, 0.2 : 0.8}}, in which, 'conv1' and
+                is the name of the conv layer, and 0.1:0.9 means when the sparsity of conv1 is 0.1 (10%), 
+                the model's val accuracy equals to 0.9.
+
+        """
         self.model = model
         self.val_func = val_func
         self.finetune_func = finetune_func
         self.analyzer = SensitivityAnalysis(self.model, self.val_func)
+        # The sensitivity analysis results
         self.resume_from = resume_frome
         # Get the original accuracy of the pretrained model
-        self.ori_acc = self.val_func(self.model)
+        self.ori_acc = None
         # Copy the original weights before pruning
         self.ori_state_dict = copy.deepcopy(self.model.state_dict())
         self.sensitivities = {}
@@ -34,15 +61,21 @@ class SensitivityPruner:
         for name, submodule in self.model.named_modules():
             self.named_module[name] = submodule
             if name in self.analyzer.target_layer:
-                # Currnetly, only count the weights in the conv layers
+                # Currently, only count the weights in the conv layers
                 # else the fully connected layer (which contains
                 # the most weights) may make the pruner prune the
                 # model too hard
                 # if hasattr(submodule, 'weight'): # Count all the weights of the model
                 self.weight_count[name] = submodule.weight.data.numel()
                 self.weight_sum += self.weight_count[name]
+        # function to generate the sparsity proportion betweent the conv layers
+        if sparsity_proportion_calc is None:
+            self.sparsity_proportion_calc = self._max_prune_ratio
+        else:
+            self.sparsity_proportion_calc = sparsity_proportion_calc
 
     def load_sensitivitis(self, filepath):
+        # TODO load from a csv file
         """
         Load the sensitivity analysis result from file
         """
@@ -56,7 +89,6 @@ class SensitivityPruner:
             return sensitivities
 
     def _max_prune_ratio(self, ori_acc, threshold, sensitivities):
-        # TODO as default, provide customerize lambda function  quantified (sensi)
         """
         Find the maximum prune ratio for a single layer whose accuracy 
         drop is lower than the threshold.
@@ -108,8 +140,6 @@ class SensitivityPruner:
                 return the normalized prune ratios for each layer.
 
         """
-        # TODO: filter out the very sensitive layers. Only prune the
-        # layers that are not very sensitive
         w_sum = 0
         _Max = 0
         for layername, ratio in ratios.items():
@@ -168,14 +198,44 @@ class SensitivityPruner:
             pruned_weight += w_count * prune_ratio
         return pruned_weight / self.weight_sum
 
-    def compress(self, target_ratio, ratio_step=0.1, threshold=0.05, MAX_ITERATION=None, checkpoint_dir=None):
+    def compress(self, target_ratio, val_args=None, val_kwargs=None,
+                 finetune_args=None, finetune_kwargs=None, ratio_step=0.1,
+                 threshold=0.05, MAX_ITERATION=None, checkpoint_dir=None):
         """
-        We iteratively prune the model according to the results of 
+        This function iteratively prune the model according to the results of 
         the sensitivity analysis.
 
+        Parameters
+        ----------
+            target_ratio:
+                Target sparsity for the model
+            val_args & val_kwargs:
+                Parameters for the val_funtion, the val_function will be called like
+                val_func(*val_args, **val_kwargs)
+            finetune_args & finetune_kwargs:
+                Parameters for the finetune function.
+            ratio_step:
+                The ratio of the weights that sensitivity pruner try to prune in each 
+                iteration.
+            threshold:
+                The hyperparameter used to determine the sparsity ratio for each layer.
+            MAX_ITERATION:
+                The maximum number of the iterations.
+            checkpoint_dir:
+                If not None, save the checkpoint of each iteration into the checkpoint_dir.
         """
+
+        if not val_args:
+            val_args = []
+        if not val_kwargs:
+            val_kwargs = {}
+        if not finetune_args:
+            finetune_args = []
+        if not finetune_kwargs:
+            finetune_kwargs = {}
+        if self.ori_acc is None:
+            self.ori_acc = self.val_func(*val_args, **val_kwargs)
         if not self.resume_from:
-            # TODO: support loading the sensitivities from the json file
             self.sensitivities = self.analyzer.analysis()
         else:
             self.sensitivities = self.load_sensitivitis(self.resume_from)
@@ -193,26 +253,22 @@ class SensitivityPruner:
             # 1) Get the current sensitivity for each layer
             # 2) Prune each layer according the sensitivies
             # 3) finetune the model
-            print('Current base accuracy', ori_acc)
-            print('Current remained ratio', cur_ratio)
-            # Use the max prune ratio whose accuracy drop is smaller
-            # than the threshold(0.05) as the quantified sensitivity
-            # for each layer
-            # ps: the smaller the max_prune_ratio, more
-            # sensitive the layer is
-            quantified = self._max_prune_ratio(
+            logger.info('Current base accuracy %f' % ori_acc)
+            logger.info('Remained %f weights' % cur_ratio)
+            # determine the sparsity proportion between different
+            # layers according to the sensitivity result
+            proportion = self.sparsity_proportion_calc(
                 ori_acc, threshold, self.sensitivities)
-            new_pruneratio = self.normalize(quantified, ratio_step)
+            new_pruneratio = self.normalize(proportion, ratio_step)
             cfg_list = self.create_cfg(new_pruneratio)
-            print(cfg_list)
+            logger.debug('Pruner Config' + str(cfg_list))
             pruner = L1FilterPruner(self.model, cfg_list)
             pruner.compress()
-            pruned_acc = self.val_func(self.model)
-            print('Accuracy after pruning:', pruned_acc)
-            # TODO: support the multiple parameters for the fine_tune function
-            self.finetune_func(self.model)
-            finetune_acc = self.val_func(self.model)
-            print('Accuracy after finetune:', finetune_acc)
+            pruned_acc = self.val_func(*val_args, **val_kwargs)
+            logger.info('Accuracy after pruning: %f' % pruned_acc)
+            self.finetune_func(*finetune_args, **finetune_kwargs)
+            finetune_acc = self.val_func(*val_args, **val_kwargs)
+            logger.info('Accuracy after finetune:' % finetune_acc)
             ori_acc = finetune_acc
             # unwrap the pruner
             pruner._unwrap_model()
@@ -224,7 +280,7 @@ class SensitivityPruner:
                 self.analyzer.already_pruned[name] = sparsity
             cur_ratio = 1 - self.current_sparsity()
             del pruner
-            print('Currently Remained ratio:', cur_ratio)
+            logger.info('Currently remained weights: %f' % cur_ratio)
             if MAX_ITERATION is not None and iteration_count < MAX_ITERATION:
                 # If this is the last prune iteration, skip the time-consuming
                 # sensitivity analysis
@@ -234,12 +290,14 @@ class SensitivityPruner:
             if checkpoint_dir is not None:
                 checkpoint_name = 'Iter_%d_finetune_acc_%.3f_sparsity_%.2f' % (
                     iteration_count, finetune_acc, cur_ratio)
-                checkpoint_path = os.path.join(checkpoint_dir, '%s.pth' % checkpoint_name)
-                cfg_path = os.path.join(checkpoint_dir, '%s_pruner.json'% checkpoint_name)
+                checkpoint_path = os.path.join(
+                    checkpoint_dir, '%s.pth' % checkpoint_name)
+                cfg_path = os.path.join(
+                    checkpoint_dir, '%s_pruner.json' % checkpoint_name)
                 torch.save(self.model.state_dict(), checkpoint_path)
                 with open(cfg_path, 'w') as jf:
                     json.dump(cfg_list, jf)
-        print('After Pruning: %.2f weights remains' % cur_ratio)
+        logger.info('After Pruning: %.2f weights remains' % cur_ratio)
         return self.model
 
     def export(self, model_path, pruner_path=None):
