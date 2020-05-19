@@ -22,7 +22,7 @@ logger.setLevel(logging.INFO)
 
 
 class SensitivityAnalysis:
-    def __init__(self, model, val_func, sparsities=None, prune_type='l1', early_stop=1.0):
+    def __init__(self, model, val_func, sparsities=None, prune_type='l1'):
         """
         Perform sensitivity analysis for this model.
         Parameters
@@ -40,12 +40,6 @@ class SensitivityAnalysis:
             prune_type:
                 The pruner type used to prune the conv layers, default is 'l1',
                 and 'l2', 'fine-grained' is also supported.
-            early_stop:
-                If this flag is set, the sensitivity analysis
-                for a conv layer will early stop when the accuracy
-                drop already reach the value of early_stop (0.05 for example).
-                The default value is 1.0, which means the analysis won't stop
-                until all given sparsities are tested.
 
         """
         self.model = model
@@ -64,7 +58,6 @@ class SensitivityAnalysis:
             self.Pruner = L2FilterPruner
         elif prune_type == 'fine-grained':
             self.Pruner = LevelPruner
-        self.early_stop = early_stop
         self.ori_acc = None  # original accuracy for the model
         # already_pruned is for the iterative sensitivity analysis
         # For example, sensitivity_pruner iteratively prune the target
@@ -85,7 +78,7 @@ class SensitivityAnalysis:
                     self.target_layer[name] = submodel
                     self.already_pruned[name] = 0
 
-    def analysis(self, val_args=None, val_kwargs=None, start=0, end=None):
+    def analysis(self, val_args=None, val_kwargs=None, start=0, end=None, early_stop=1.0):
         """
         This function analyze the sensitivity to pruning for 
         each conv layer in the target model.
@@ -106,6 +99,12 @@ class SensitivityAnalysis:
                 kwargs for the val_funtion
                 The val_funtion will be called as:
                     val_function(*val_args, **val_kwargs)
+            early_stop:
+                If this flag is set, the sensitivity analysis
+                for a conv layer will early stop when the accuracy
+                drop already reach the value of early_stop (0.05 for example).
+                The default value is 1.0, which means the analysis won't stop
+                until all given sparsities are tested.
 
         Returns
         -------
@@ -147,7 +146,7 @@ class SensitivityAnalysis:
                 pruner._unwrap_model()
                 del pruner
                 # if the accuracy drop already reach the 'early_stop'
-                if val_acc + self.early_stop < self.ori_acc:
+                if val_acc + early_stop < self.ori_acc:
                     break
 
             # reset the weights pruned by the pruner, because
