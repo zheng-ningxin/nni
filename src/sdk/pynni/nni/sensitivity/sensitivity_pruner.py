@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 import os
+import sys
+import csv
 import copy
 import json
 import logging
@@ -13,9 +15,10 @@ from nni.compression.torch import L1FilterPruner
 from nni.compression.torch import L2FilterPruner
 
 MAX_PRUNE_RATIO_PER_ITER = 0.95
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 logger = logging.getLogger('Sensitivity_Pruner')
 # logger.setLevel(logging.INFO)
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 
 class SensitivityPruner:
     def __init__(self, model, val_func, finetune_func=None, resume_frome=None, sparsity_proportion_calc=None):
@@ -87,6 +90,30 @@ class SensitivityPruner:
                 sensitivities[name] = {float(k): float(v)
                                        for k, v in sensitivities[name].items()}
             return sensitivities
+
+    def load_sensitivitis_csv(self, filepath):
+        """
+        load the sensitivity results exported by the sensitivity analyzer
+        """
+        assert os.path.exists(filepath)
+        with open(filepath, 'r') as csvf:
+            csv_r = csv.reader(csvf)
+            header = next(csv_r)
+            sparsities = [float(x) for x in header[1:]]
+            sensitivities = {}
+            for row in csv_r:
+                layername = row[0]
+                accuracies = [float(x) for x in row[1:]]
+                sensitivities[layername] = {}
+                print(row)
+                print(sparsities)
+                print(accuracies)
+                for i, accuracy in enumerate(accuracies):
+                    print(sensitivities[layername])
+                    print(sparsities[i])
+                    sensitivities[layername][sparsities[i]] = accuracy
+            return sensitivities
+
 
     def _max_prune_ratio(self, ori_acc, threshold, sensitivities):
         """
