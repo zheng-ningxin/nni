@@ -259,7 +259,8 @@ class SensitivityPruner:
         if self.ori_acc is None:
             self.ori_acc = self.val_func(*val_args, **val_kwargs)
         if not resume_sensitivity:
-            self.sensitivities = self.analyzer.analysis()
+            self.sensitivities = self.analyzer.analysis(
+                    val_args=val_args, val_kwargs=val_kwargs, early_stop=threshold)
         else:
             self.sensitivities = self.load_sensitivitis(resume_sensitivity)
 
