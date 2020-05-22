@@ -23,7 +23,7 @@ logger = logging.getLogger('Sensitivity_Pruner')
 
 
 class SensitivityPruner:
-    def __init__(self, model, val_func, finetune_func=None, resume_frome=None, sparsity_proportion_calc=None):
+    def __init__(self, model, val_func, finetune_func=None, sparsity_proportion_calc=None):
         """
         Parameters
         ----------
@@ -35,10 +35,6 @@ class SensitivityPruner:
             finetune_func:
                 finetune function for the model. This parameter is not essential, if is not None, 
                 the sensitivity pruner will finetune the model after pruning in each iteration.
-            resume_from:
-                resume the sensitivity results from this file. In the one shot pruning mode(in which
-                the maximum iteration is set to 1), user can avoid the repeated sensitivity analysis 
-                for the same model.
             sparsity_proportion_calc:
                 This function generate the sparsity proportion between the conv layers according to the
                 sensitivity analysis results. The input of this function is a dict, for example :
@@ -51,8 +47,6 @@ class SensitivityPruner:
         self.val_func = val_func
         self.finetune_func = finetune_func
         self.analyzer = SensitivityAnalysis(self.model, self.val_func)
-        # The sensitivity analysis results
-        self.resume_from = resume_frome
         # Get the original accuracy of the pretrained model
         self.ori_acc = None
         # Copy the original weights before pruning
@@ -78,6 +72,8 @@ class SensitivityPruner:
             self.sparsity_proportion_calc = self._max_prune_ratio
         else:
             self.sparsity_proportion_calc = sparsity_proportion_calc
+        # The ratio of remained weights is 1.0 at the begining
+        self.remained_ratio = 1.0
 
     def load_sensitivitis(self, filepath):
         # TODO load from a csv file
@@ -107,12 +103,7 @@ class SensitivityPruner:
                 layername = row[0]
                 accuracies = [float(x) for x in row[1:]]
                 sensitivities[layername] = {}
-                print(row)
-                print(sparsities)
-                print(accuracies)
                 for i, accuracy in enumerate(accuracies):
-                    print(sensitivities[layername])
-                    print(sparsities[i])
                     sensitivities[layername][sparsities[i]] = accuracy
             return sensitivities
 
@@ -227,8 +218,8 @@ class SensitivityPruner:
         return pruned_weight / self.weight_sum
 
     def compress(self, target_ratio, val_args=None, val_kwargs=None,
-                 finetune_args=None, finetune_kwargs=None, ratio_step=0.1,
-                 threshold=0.05, MAX_ITERATION=None, checkpoint_dir=None):
+                 finetune_args=None, finetune_kwargs=None, resume_sensitivity=None, 
+                 ratio_step=0.1, threshold=0.05, MAX_ITERATION=None, checkpoint_dir=None):
         """
         This function iteratively prune the model according to the results of 
         the sensitivity analysis.
@@ -242,6 +233,10 @@ class SensitivityPruner:
                 val_func(*val_args, **val_kwargs)
             finetune_args & finetune_kwargs:
                 Parameters for the finetune function.
+            resume_sensitivity:
+                resume the sensitivity results from this file. In the one shot pruning mode(in which
+                the maximum iteration is set to 1), user can avoid the repeated sensitivity analysis 
+                for the same model.
             ratio_step:
                 The ratio of the weights that sensitivity pruner try to prune in each 
                 iteration.
@@ -263,12 +258,12 @@ class SensitivityPruner:
             finetune_kwargs = {}
         if self.ori_acc is None:
             self.ori_acc = self.val_func(*val_args, **val_kwargs)
-        if not self.resume_from:
+        if not resume_sensitivity:
             self.sensitivities = self.analyzer.analysis()
         else:
-            self.sensitivities = self.load_sensitivitis(self.resume_from)
+            self.sensitivities = self.load_sensitivitis(resume_sensitivity)
 
-        cur_ratio = 1.0
+        cur_ratio = self.remained_ratio
         ori_acc = self.ori_acc
         iteration_count = 0
         if checkpoint_dir is not None:
@@ -310,7 +305,7 @@ class SensitivityPruner:
             cur_ratio = 1 - self.current_sparsity()
             del pruner
             logger.info('Currently remained weights: %f' % cur_ratio)
-            
+
             if checkpoint_dir is not None:
                 checkpoint_name = 'Iter_%d_finetune_acc_%.3f_sparsity_%.2f' % (
                     iteration_count, finetune_acc, cur_ratio)
@@ -327,7 +322,6 @@ class SensitivityPruner:
                 self.analyzer.load_state_dict(self.model.state_dict())
                 self.sensitivities = self.analyzer.analysis(
                     val_args=val_args, val_kwargs=val_kwargs, early_stop=threshold)
-
 
         logger.info('After Pruning: %.2f weights remains' % cur_ratio)
         return self.model
@@ -351,3 +345,26 @@ class SensitivityPruner:
                 cfg_list = self.create_cfg(sparsity_ratios)
             with open(pruner_path, 'w') as pf:
                 json.dump(cfg_list, pf)
+
+    def resume(self, checkpoint, pruner_cfg):
+        """
+        Resume from the checkpoint and continue to prune the model.
+
+        Parameters
+        ----------
+            checkpoint:
+                checkpoint of the model
+            pruner_cfg:
+                configuration of the previous pruner.
+        """
+        assert os.path.exists(checkpoint)
+        assert os.path.exists(pruner_cfg)
+        self.ori_state_dict = torch.load(checkpoint)
+        self.model.load_state_dict(self.ori_state_dict)
+        with open(pruner_cfg, 'r') as jf:
+            cfgs = json.load(jf)
+            # reset the already pruned for the sensitivity analyzer
+            for cfg in cfgs:
+                for layername in cfg['op_names']:
+                    self.analyzer.already_pruned[layername] = float(cfg['sparsity'])
+            self.remained_ratio = 1.0 - self.current_sparsity()
