@@ -361,6 +361,9 @@ class SensitivityPruner:
         assert os.path.exists(checkpoint)
         assert os.path.exists(pruner_cfg)
         self.ori_state_dict = torch.load(checkpoint)
+        # the ori_state_dict of the sensitivity analyzer also needs update
+        # self.analyzer.load_state_dict(self.ori_state_dict)
+        self.analyzer.ori_state_dict = copy.deepcopy(self.ori_state_dict)
         self.model.load_state_dict(self.ori_state_dict)
         with open(pruner_cfg, 'r') as jf:
             cfgs = json.load(jf)
