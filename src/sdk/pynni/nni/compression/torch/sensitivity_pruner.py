@@ -290,8 +290,11 @@ class SensitivityPruner:
             pruner.compress()
             pruned_acc = self.val_func(*val_args, **val_kwargs)
             logger.info('Accuracy after pruning: %f' % pruned_acc)
-            self.finetune_func(*finetune_args, **finetune_kwargs)
-            finetune_acc = self.val_func(*val_args, **val_kwargs)
+            finetune_acc = pruned_acc
+            if self.finetune_func is not None:
+                # if the finetune function is None, then skip the finetune
+                self.finetune_func(*finetune_args, **finetune_kwargs)
+                finetune_acc = self.val_func(*val_args, **val_kwargs)
             logger.info('Accuracy after finetune:' % finetune_acc)
             ori_acc = finetune_acc
             # unwrap the pruner
