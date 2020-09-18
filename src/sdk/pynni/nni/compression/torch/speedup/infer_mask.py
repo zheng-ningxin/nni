@@ -203,7 +203,7 @@ class AutoMaskInference:
         return out_mask
 
 
-class MaskFunction:
+class MaskInferFunction:
     """
     This class analyze the calculation logic of the module, and
     get the relationship between the input tensor, module's weight
