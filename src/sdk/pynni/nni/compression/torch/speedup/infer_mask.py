@@ -203,29 +203,3 @@ class AutoMaskInference:
         return out_mask
 
 
-class MaskInferFunction:
-    """
-    This class analyze the calculation logic of the module, and
-    get the relationship between the input tensor, module's weight
-    and the output tensor.
-    """
-
-    def __init__(self, module, dummy_inputs):
-        """
-        Parameters
-        ----------
-        module: nn.module
-            The module to analyze the relationship betweent the input
-            tensor, weight, and the output tensor.
-        dummy_inputs: tensor/list
-            The dummy input for the target module, it can be an tensor or
-            a list. If it is a tensor, then the module only take a tensor
-            as input.
-        """
-        self.module = module
-        self.dummy_inputs = dummy_inputs
-        self._analyze()
-
-    def _analyze(self):
-
-        pass
