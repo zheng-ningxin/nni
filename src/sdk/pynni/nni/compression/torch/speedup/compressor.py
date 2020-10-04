@@ -9,6 +9,7 @@ from .compress_modules import replace_module
 from .infer_shape import ModuleMasks, infer_from_mask, infer_from_inshape, infer_from_outshape
 from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
+from .constants import AutoMaskInferenceType
 _logger = logging.getLogger(__name__)
 
 
@@ -59,6 +60,13 @@ class ModelSpeedup:
         self.inferred_masks = dict() # key: module_name, value: ModuleMasks
         self.dummy_input = dummy_input
         self.torch_graph = build_module_graph(model, dummy_input)
+        # dict object to save the auto inferences objects of the submodules
+        self.auto_inferences = {}
+        # the index dict to find the corresponding torch._C.Value object
+        # according to the debug name
+        # we need the dummy_input to infer the mask automaticlly, so we save
+        # the indexes from tensor's debugname to the torch._C.Value object.
+        self.debugname_to_value = {}
 
     # def infer_module_mask(self, module_name, last_module, mask=None, in_shape=None, out_shape=None):
     #     """
@@ -136,10 +144,77 @@ class ModelSpeedup:
     #         successors = self.torch_graph.find_successors(module_name)
     #         for _module_name in successors:
     #             self.infer_module_mask(_module_name, module_name, in_shape=output_cmask)
+
+    def _prepare_auto_inference(self, node):
+        """
+        Prepare the dummy_input and the input mask, weight mask, output mask
+        for the target node. If the mask tensor is alread created by other nodes,
+        then read the mask tensor from self.mask, else create a all-ones mask tensor
+        and put it in self.masks.
+        Parameters
+        ----------
+        node: NodePyGroup
+        Returns
+        -------
+        dummy_input: list
+            List of tensors that will be used as input for the target node.
+        in_mask: list
+            List of mask tensors. The length of in_mask is same with dummy_input.
+        weight_mask: dict
+            Dict object that stores the weight mask of the module, if the node corresponds
+            a function, then weight_mask is {}, else the key is the parameter name(such as
+            weight, bias), and the value is the mask tensor for the corresponding parameters.
+        output_mask: list
+            List of mask tensors. The mask tensor of the output tensors, the length of this
+            list should be the same with the number of the output tensors.
+        """
+        module_name = node.name
+        unique_name = node.unique_name
+        # prepare the inputs and outputs mask for this node,
+        # if there is already a mask in self.masks, then use
+        # the original mask tensor, else create a new one.
+        inputs_name = node.inputs
+        outputs_name = node.outputs
+        # build the dummy_input, in_masks the target node
+        dummy_input = []
+        in_mask = []
+        for _input in inputs_name:
+            v_node = self.debugname_to_value[_input]
+            if isinstance(v_node.type(), torch._C.TensorType):
+                shape = tuple(v_node.type().sizes())
+                # Note: cannot support the value-dependent models
+                dummy_input.append(torch.rand(shape))
+                if _input in self.masks:
+                    _input_mask = self.masks[_input]
+                else:
+                    _input_mask = torch.ones(shape)
+                    self.masks[_input] = _input_mask
+                in_mask.append(_input_mask)
+        weight_mask = dict()
+        if module_name in self.masks:
+            weight_mask = self.masks[module_name]
+        for _output in outputs_name:
+            v_node = self.debugname_to_value[_output]
+            if isinstance(v_node.type(), torch._C.TensorType):
+                shape = tuple(v_node.type().sizes())
     def forward_mask_inference(self, node):
         module_name = node.name
+        unique_name = node.unique_name
+        # get the corresponding auto mask inference class according
+        # to the config
+        if node.op_type not in AutoMaskInferenceType:
+            errmsg = 'The auto inference type of %s is not specified! Please specify the \
+                auto mask inference type in constants.py!' % str(node.op_type) 
+            raise Exception(errmsg)
+        AutoMaskInferenceClass = AutoMaskInferenceType[node.op_type]
+        # this name is consistent with the name returned by named_modules()
         if node.type == 'func':
+            # we cannot get the runable function directly from the jit traced
+            # graph, so we translate it back to python function
             func = jit_to_python_function(node)
+            # function doesn't have weights
+            _auto_infer = AutoMaskInferenceClass(func, dummy_input, in_masks, None, output_mask)
+            self.auto_inferences[unique_name] = _auto_infer
         elif node.type == 'module':
             module = get_module_by_name(self.bound_model, module_name)
             mask_infer = AutoMaskInference()
@@ -197,32 +272,32 @@ class ModelSpeedup:
         #         continue
         #     self.infer_module_mask(module_name, None, mask=mask)
 
-    def replace_compressed_modules(self):
-        """
-        Replace all the modules that have changed (weights/inputs/output) shape.
-        The new module is created using the same arguments of the to-be-replaced module,
-        and correctly inherits its weights.
+    # def replace_compressed_modules(self):
+    #     """
+    #     Replace all the modules that have changed (weights/inputs/output) shape.
+    #     The new module is created using the same arguments of the to-be-replaced module,
+    #     and correctly inherits its weights.
 
-        NOTE: ```func``` type cannot be replaced as it is not a module, thus, one limitation
-        is that ```func``` should be not required to be replaced.
-        """
-        for module_name in self.inferred_masks:
-            g_node = self.torch_graph.name_to_node[module_name]
-            _logger.debug("replace %s, in %s type, with op_type %s",
-                          module_name, g_node.type, g_node.op_type)
-            if g_node.type == 'module':
-                super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
-                m_type = g_node.op_type
-                if not m_type in replace_module:
-                    raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
-                _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
-                compressed_module = replace_module[m_type](leaf_module, self.inferred_masks[module_name])
-                setattr(super_module, g_node.name.split('.')[-1], compressed_module)
-            elif g_node.type == 'func':
-                _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
-                             module_name, g_node.op_type)
-            else:
-                raise RuntimeError("Unsupported node type: {}".format(g_node.type))
+    #     NOTE: ```func``` type cannot be replaced as it is not a module, thus, one limitation
+    #     is that ```func``` should be not required to be replaced.
+    #     """
+    #     for module_name in self.inferred_masks:
+    #         g_node = self.torch_graph.name_to_node[module_name]
+    #         _logger.debug("replace %s, in %s type, with op_type %s",
+    #                       module_name, g_node.type, g_node.op_type)
+    #         if g_node.type == 'module':
+    #             super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
+    #             m_type = g_node.op_type
+    #             if not m_type in replace_module:
+    #                 raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
+    #             _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
+    #             compressed_module = replace_module[m_type](leaf_module, self.inferred_masks[module_name])
+    #             setattr(super_module, g_node.name.split('.')[-1], compressed_module)
+    #         elif g_node.type == 'func':
+    #             _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
+    #                          module_name, g_node.op_type)
+    #         else:
+    #             raise RuntimeError("Unsupported node type: {}".format(g_node.type))
 
 
     def speedup_model(self):
@@ -230,6 +305,18 @@ class ModelSpeedup:
         There are basically two steps: first, do mask/shape inference,
         second, replace modules.
         """
+        # initilize the self.debugname_to_value
+        traced_graph = self.torch_graph.trace.graph
+        for node in traced_graph.nodes():
+            for _input in node.inputs():
+                debug_name = _input.debugName()
+                if debug_name not in self.debugname_to_value:
+                    self.debugname_to_value[debug_name] = _input
+            for _output in node.outputs():
+                debug_name = _output.debugName()
+                if debug_name not in self.debugname_to_value:
+                    self.debugname_to_value[debug_name] = _output
+
         training = self.bound_model.training
         _logger.info("start to speed up the model")
         _logger.info("fix the mask conflict of the interdependent layers")

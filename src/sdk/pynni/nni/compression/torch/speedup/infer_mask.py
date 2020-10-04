@@ -10,6 +10,33 @@ _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
 class AutoMaskInference:
+    def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, output_mask=None):
+        self.module = module
+        if isinstance(dummy_input, list):
+            assert isinstance(in_masks, list)
+            self.dummy_input = dummy_input
+            self.in_masks = in_masks
+        else:
+            self.dummy_input = [dummy_input]
+            self.in_masks = [in_masks]
+        self.weight_mask = weight_mask
+        self.output_mask = output_mask
+        self.weights = {}
+        # get all the parameter tensors of the target module
+        for name, para in module.named_parameters():
+            self.weights[name] = para.data
+
+    def update_input_mask(self):
+        raise NotImplementedError
+
+    def update_output_mask(self):
+        raise NotImplementedError
+
+    def update_weight_mask(self):
+        raise NotImplementedError
+
+
+class AutoMaskInferenceZero:
     """
     Given some masks (output mask, input mask, weight mask, for example) of the module,
     infer the rest masks for the target module automatically.
@@ -30,21 +57,8 @@ class AutoMaskInference:
         weight_mask: dict
         output_mask: list
         """
-        assert isinstance(module, torch.nn.Module)
-        self.module = module
-        if isinstance(dummy_input, list):
-            assert isinstance(in_masks, list)
-            self.dummy_input = dummy_input
-            self.in_masks = in_masks
-        else:
-            self.dummy_input = [dummy_input]
-            self.in_masks = [in_masks]
-        self.weight_mask = weight_mask
-        self.output_mask = output_mask
-        self.weights = {}
-        # get all the parameter tensors of the target module
-        for name, para in module.named_parameters():
-            self.weights[name] = para.data
+        # assert isinstance(module, torch.nn.Module)
+        super(AutoMaskInferenceZero, self).__init__(module, dummy_input, in_masks, weight_mask, output_mask)
 
     def _random_init(self, start=1, end=10):
         """
@@ -203,3 +217,6 @@ class AutoMaskInference:
         return out_mask
 
 
+class AutoMaskInferenceRemove(AutoMaskInference):
+    def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, output_mask=None):
+        super(AutoMaskInferenceRemove, self).__init__(module, dummy_input, in_masks, weight_mask, output_mask)

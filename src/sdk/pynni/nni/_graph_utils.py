@@ -247,6 +247,7 @@ class TorchModuleGraph(TorchGraph):
         self.name_to_node, self.input_to_node, self.output_to_node = self._build_graph()
         self._extract_auxiliary_info()
 
+
     def _expand_key_func_node(self, node, nodes, input_to_node, output_to_node,
                               module_type):
         """
