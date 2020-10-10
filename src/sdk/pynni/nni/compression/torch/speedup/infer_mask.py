@@ -245,7 +245,9 @@ class AutoMaskInferenceZero(AutoMaskInference):
         _ori_zeros = _ori_out == 0
         # only mask the newly added zeros
         _new_zeors[_ori_zeros] = False
-        return _new_zeors
+        out_mask = torch.ones_like(_ori_out)
+        out_mask[_new_zeors] = 0
+        return out_mask
 
 
     def update_output_mask(self):
@@ -253,7 +255,7 @@ class AutoMaskInferenceZero(AutoMaskInference):
         Infer and update the output mask.
         """
         _out_m = self._forwards_outmask()
-        self.output_mask[_out_m] = 0
+        self.output_mask *= _out_m
 
 
     def update_weight_mask(self):
@@ -278,12 +280,12 @@ class AutoMaskInferenceZero(AutoMaskInference):
                 self.in_masks[in_id] *= self._backwards_nan(_input)
 
     def update(self):
-        self.update_input_mask()
         self.update_output_mask()
+        self.update_input_mask()
         self.update_weight_mask()
 
 
-class AutoMaskInferenceRemove(AutoMaskInference):
+class AutoMaskInferenceRemove(AutoMaskInferenceZero):
     def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, output_mask=None):
         super(AutoMaskInferenceRemove, self).__init__(
             module, dummy_input, in_masks, weight_mask, output_mask)
@@ -311,13 +313,31 @@ class AutoMaskInferenceRemove(AutoMaskInference):
         Infer the output mask of the output tensor.
         """
         self.random_init()
-
+        self.apply_mask()
+        out_tensor = self.module(*self.dummy_input)
+        _tmp_mask = torch.ones_like(out_tensor)
+        # the nan value in the out tensor should be masked
+        masked_pos = torch.isnan(out_tensor)
+        _tmp_mask[masked_pos] = 0
+        return _tmp_mask
 
     def update_output_mask(self):
-        pass
+        out_m = self._forwards_outmask()
+        self.output_mask *= out_m
 
     def update_weight_mask(self):
-        pass
+        if not isinstance(self.module, nn.Module):
+            # there is no parameters
+            return
+        for name, para in self.module.named_parameters():
+            self.weight_mask[name] *= self._backwards_nan(para)
 
     def update_input_mask(self):
-        pass
+        for in_id, _input in enumerate(self.dummy_input):
+            if isinstance(_input, torch.Tensor):
+                self.in_masks[in_id] *= self._backwards_nan(_input)
+
+    def update(self):
+        self.update_output_mask()
+        self.update_input_mask()
+        self.update_weight_mask()
