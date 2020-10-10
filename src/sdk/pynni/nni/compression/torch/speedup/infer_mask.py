@@ -9,22 +9,42 @@ import torch.nn as nn
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
+
 class AutoMaskInference:
     def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, output_mask=None):
+        errmsg = '%s is not callable, should pass the nn.Module/function' % str(
+            module)
+        assert callable(module), errmsg
         self.module = module
         if isinstance(dummy_input, list):
+            # if there are multiple input variables
             assert isinstance(in_masks, list)
             self.dummy_input = dummy_input
             self.in_masks = in_masks
         else:
+            # if there is only one input variable
             self.dummy_input = [dummy_input]
             self.in_masks = [in_masks]
-        self.weight_mask = weight_mask
-        self.output_mask = output_mask
+        for in_id, _ in enumerate(self.in_masks):
+            if self.in_masks[in_id] is None and isinstance(self.dummy_input[in_id], torch.Tensor):
+                # if the input mask is None then create a all-ones mask for corresponding input tensor
+                self.in_masks[in_id] = torch.ones_like(self.dummy_input[in_id])
+        if output_mask is not None:
+            self.output_mask = output_mask
+        else:
+            _tmp_out = self.module(*dummy_input)
+            self.output_mask = torch.ones_like(_tmp_out)
         self.weights = {}
-        # get all the parameter tensors of the target module
-        for name, para in module.named_parameters():
-            self.weights[name] = para.data
+        self.weight_mask = {}
+        if weight_mask:
+            self.weight_mask.update(weight_mask)
+        if isinstance(self.module, nn.Module):
+            # the function should not has parameters
+            # get all the parameter tensors of the target module
+            for name, para in module.named_parameters():
+                self.weights[name] = para.data
+                if name not in self.weight_mask:
+                    self.weight_mask[name] = torch.ones_like(para.data)
 
     def update_input_mask(self):
         raise NotImplementedError
@@ -35,8 +55,11 @@ class AutoMaskInference:
     def update_weight_mask(self):
         raise NotImplementedError
 
+    def update(self):
+        raise NotImplementedError
 
-class AutoMaskInferenceZero:
+
+class AutoMaskInferenceZero(AutoMaskInference):
     """
     Given some masks (output mask, input mask, weight mask, for example) of the module,
     infer the rest masks for the target module automatically.
@@ -57,8 +80,8 @@ class AutoMaskInferenceZero:
         weight_mask: dict
         output_mask: list
         """
-        # assert isinstance(module, torch.nn.Module)
-        super(AutoMaskInferenceZero, self).__init__(module, dummy_input, in_masks, weight_mask, output_mask)
+        super(AutoMaskInferenceZero, self).__init__(
+            module, dummy_input, in_masks, weight_mask, output_mask)
 
     def _random_init(self, start=1, end=10):
         """
@@ -73,21 +96,25 @@ class AutoMaskInferenceZero:
 
     def _zero_grad(self):
         # set the weight's gradient to zero
-        self.module.zero_grad()
+        if isinstance(self.module, nn.Module):
+            self.module.zero_grad()
         # also zero the gradient of the input tensors
         for tensor in self.dummy_input:
             if isinstance(tensor, torch.Tensor):
-                tensor.data.zero_()
+                if tensor.grad:
+                    tensor.grad.data.zero_()
 
     def _apply_mask(self):
+        # apply the input mask
         for tid, in_tensor in enumerate(self.dummy_input):
             if isinstance(in_tensor, torch.Tensor) and self.in_masks[tid] is not None:
                 in_tensor.data *= self.in_masks[tid]
+        # apply the weight mask
         for name, para in self.module.named_parameters():
             if name in self.weight_mask:
                 para.data *= self.weight_mask[name].data
 
-    def _inputs_internal(self, target_tensor, target_mask):
+    def _inputs_internal(self, target_tensor):
         """
         Analyze the mask relationship between the multiple inputs of the
         module. Here we can also take the weights as an input of the new operation.
@@ -104,11 +131,10 @@ class AutoMaskInferenceZero:
         ----------
         target_tensor: tensor
             We try to infer the mask for the target_tensor.
-        target_mask: tensor
-            The mask of the target_tensor
         """
         # we need to trace the mask relationship by the gradient
-        self.module.train()
+        if isinstance(self.module, nn.Module):
+            self.module.train()
         self._zero_grad()
         # enable the grad for the target tensor
         target_tensor.requires_grad_()
@@ -119,21 +145,34 @@ class AutoMaskInferenceZero:
         # before call the backward, following operations should not change
         # the gradient dependent chain
         with torch.no_grad():
+            self._random_init()
+            # set the masked values to zero and the unmasked valued to positive
+            # values
             for _id, tensor in enumerate(self.dummy_input):
                 if self.in_masks[_id] is not None:
-                    tensor.data.copy_(self.in_masks[_id])
-                else:
-                    tensor.data = 1
+                    tensor.data *= self.in_masks[_id]
+
             for para_name in self.weights:
                 if para_name in self.weight_mask:
-                    self.weights[para_name].copy_(
-                        self.weight_mask[para_name].data)
+                    self.weights[para_name] *= self.weight_mask[para_name].data
+
         loss.backward()
         # now all the positions that the gradient equals to zeros
         # can be masked in the target tensor
         grad = target_tensor.grad.data
-        target_mask.data[grad == 0] = 0
-        return target_mask
+        return grad == 0
+
+    def update_weight_mask(self):
+        """
+        Update the masks of parameters
+        """
+        if not isinstance(self.module, nn.Module):
+            # function don't have parameters
+            return
+        for name, para in self.module.named_parameters():
+            # update the masks of all parameters
+            self.weight_mask[name] *= self._inputs_internal(para)
+            self.weight_mask[name] *= self._backwards_nan(para)
 
     def _backwards_nan(self, out_tensor, out_mask, in_tensor, in_mask=None):
         """
@@ -185,9 +224,12 @@ class AutoMaskInferenceZero:
                     # to mask these values in the input tensor
                     in_tensor.data[_slice] = float('nan')
                     tmp_out_tensor = self.module(*self.dummy_input)
-                    _logger.debug('Try the dimension: %d, Index: %d', _dim, _index)
-                    _logger.debug('The output tensor after nan colored: \n%s', str(tmp_out_tensor))
-                    _logger.debug('The expected output tensor: \n%s', str(nan_mask*out_tensor))
+                    _logger.debug(
+                        'Try the dimension: %d, Index: %d', _dim, _index)
+                    _logger.debug(
+                        'The output tensor after nan colored: \n%s', str(tmp_out_tensor))
+                    _logger.debug('The expected output tensor: \n%s',
+                                  str(nan_mask*out_tensor))
                     _nan_pos1 = nan_mask.cpu().numpy()
                     _nan_pos2 = tmp_out_tensor.cpu().numpy()
                     if np.array_equal(np.isnan(_nan_pos1), np.isnan(_nan_pos2)):
@@ -198,7 +240,14 @@ class AutoMaskInferenceZero:
                         flag = True
         return in_mask
 
-    def _forwards_outmask(self, out_mask):
+    def update_output_mask(self):
+        """
+        Infer and update the output mask.
+        """
+        _out_m = self._forwards_outmask()
+        self.output_mask[_out_m] = 0
+
+    def _forwards_outmask(self):
         """
         Infer the output mask for the output tensor.
         """
@@ -213,10 +262,13 @@ class AutoMaskInferenceZero:
         _ori_zeros = _ori_out == 0
         # only mask the newly added zeros
         _new_zeors[_ori_zeros] = False
-        out_mask[_new_zeors] = 0
-        return out_mask
+        return _new_zeors
 
 
 class AutoMaskInferenceRemove(AutoMaskInference):
     def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, output_mask=None):
-        super(AutoMaskInferenceRemove, self).__init__(module, dummy_input, in_masks, weight_mask, output_mask)
+        super(AutoMaskInferenceRemove, self).__init__(
+            module, dummy_input, in_masks, weight_mask, output_mask)
+
+    def update_output_mask(self):
+        pass

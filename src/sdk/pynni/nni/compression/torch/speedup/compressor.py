@@ -35,6 +35,7 @@ def get_module_by_name(model, module_name):
     leaf_module = getattr(model, name_list[-1])
     return model, leaf_module
 
+
 class ModelSpeedup:
     """
     This class is to speedup the model with provided weight mask
@@ -57,7 +58,7 @@ class ModelSpeedup:
 
         self.bound_model = model
         self.masks = torch.load(masks_file, map_location)
-        self.inferred_masks = dict() # key: module_name, value: ModuleMasks
+        self.inferred_masks = dict()  # key: module_name, value: ModuleMasks
         self.dummy_input = dummy_input
         self.torch_graph = build_module_graph(model, dummy_input)
         # dict object to save the auto inferences objects of the submodules
@@ -184,27 +185,47 @@ class ModelSpeedup:
                 shape = tuple(v_node.type().sizes())
                 # Note: cannot support the value-dependent models
                 dummy_input.append(torch.rand(shape))
-                if _input in self.masks:
-                    _input_mask = self.masks[_input]
-                else:
-                    _input_mask = torch.ones(shape)
-                    self.masks[_input] = _input_mask
-                in_mask.append(_input_mask)
+                if _input not in self.masks:
+                    self.masks[_input] = torch.ones(shape)
+                in_mask.append(self.masks[_input])
+
+        # prepare the parameter mask tensors
         weight_mask = dict()
         if module_name in self.masks:
             weight_mask = self.masks[module_name]
+
+        # prepare the output mask tensors
+        output_mask = []
         for _output in outputs_name:
             v_node = self.debugname_to_value[_output]
             if isinstance(v_node.type(), torch._C.TensorType):
                 shape = tuple(v_node.type().sizes())
-    def forward_mask_inference(self, node):
+                if _output not in self.masks:
+                    _output_mask = torch.ones(shape)
+                    self.masks[_output] = _output_mask
+                output_mask.append(self.masks[_output])
+        return dummy_input, in_mask, weight_mask, output_mask
+
+    def _update_mask(self, node):
+        """
+        Update the mask for the target node.
+        """
         module_name = node.name
         unique_name = node.unique_name
+        if unique_name in self.auto_inferences:
+            # if the auto inference object already in self.auto_inference, then
+            # directly use the previous one
+            self.auto_inferences[unique_name].update()
+            return
+        # if it is the first visit to this node, then we create a corresponding auto
+        # mask inference object for this node
+        dummy_input, in_masks, weight_mask, output_mask = self._prepare_auto_inference(
+            node)
         # get the corresponding auto mask inference class according
         # to the config
         if node.op_type not in AutoMaskInferenceType:
             errmsg = 'The auto inference type of %s is not specified! Please specify the \
-                auto mask inference type in constants.py!' % str(node.op_type) 
+                auto mask inference type in constants.py!' % str(node.op_type)
             raise Exception(errmsg)
         AutoMaskInferenceClass = AutoMaskInferenceType[node.op_type]
         # this name is consistent with the name returned by named_modules()
@@ -213,12 +234,15 @@ class ModelSpeedup:
             # graph, so we translate it back to python function
             func = jit_to_python_function(node)
             # function doesn't have weights
-            _auto_infer = AutoMaskInferenceClass(func, dummy_input, in_masks, None, output_mask)
-            self.auto_inferences[unique_name] = _auto_infer
-        elif node.type == 'module':
+            _auto_infer = AutoMaskInferenceClass(
+                func, dummy_input, in_masks, weight_mask, output_mask)
+        else:
+            # node.type == 'module':
             module = get_module_by_name(self.bound_model, module_name)
-            mask_infer = AutoMaskInference()
-
+            _auto_infer = AutoMaskInferenceClass(
+                module, dummy_input, in_masks, weight_mask, output_mask)
+        self.auto_inferences[unique_name] = _auto_infer
+        _auto_infer.update()
 
     def infer_modules_masks(self):
         """
@@ -252,12 +276,25 @@ class ModelSpeedup:
         while not visit_queue.empty():
             curnode = visit_queue.get()
             # forward mask inference for curnode
-            self.forward_mask_inference(curnode)
+            self._update_mask(curnode)
             successors = self.torch_graph.find_successors(curnode.unique_name)
             for successor in successors:
                 in_degree[successor.unique_name] -= 1
                 if in_degree[successor.unique_name] == 0:
                     visit_queue.put(successor)
+        # backward mask inference
+        for node in out_degree:
+            if out_degree[node] == 0:
+                visit_queue.put(node)
+        while not visit_queue.empty():
+            curnode = visit_queue.get()
+            self._update_mask(curnode)
+            predecessors = self.torch_graph.find_predecessors(
+                curnode.unique_name)
+            for predecessor in predecessors:
+                out_degree[predecessor.unique_name] -= 1
+                if out_degree[predecessor.unique_name] == 0:
+                    visit_queue.put(predecessor)
 
         # Backwards mask inference
         # for module_name, mask in self.masks.items():
@@ -299,30 +336,45 @@ class ModelSpeedup:
     #         else:
     #             raise RuntimeError("Unsupported node type: {}".format(g_node.type))
 
+    def resolve_conflicts(self):
+        """
+        resolve the shape/mask conflict.
+        """
+        pass
+
+    def initialize_speedup(self):
+        """
+        Do some initial work for speedup.
+        """
+        # initialize the self.debugname_to_value
+        # build a mapping table from the debug name of the tensor
+        # to its value node in the graph
+        traced_graph=self.torch_graph.trace.graph
+        for node in traced_graph.nodes():
+            for _input in node.inputs():
+                debug_name=_input.debugName()
+                if debug_name not in self.debugname_to_value:
+                    self.debugname_to_value[debug_name]=_input
+            for _output in node.outputs():
+                debug_name=_output.debugName()
+                if debug_name not in self.debugname_to_value:
+                    self.debugname_to_value[debug_name]=_output
+
 
     def speedup_model(self):
         """
         There are basically two steps: first, do mask/shape inference,
         second, replace modules.
         """
-        # initilize the self.debugname_to_value
-        traced_graph = self.torch_graph.trace.graph
-        for node in traced_graph.nodes():
-            for _input in node.inputs():
-                debug_name = _input.debugName()
-                if debug_name not in self.debugname_to_value:
-                    self.debugname_to_value[debug_name] = _input
-            for _output in node.outputs():
-                debug_name = _output.debugName()
-                if debug_name not in self.debugname_to_value:
-                    self.debugname_to_value[debug_name] = _output
 
-        training = self.bound_model.training
         _logger.info("start to speed up the model")
-        _logger.info("fix the mask conflict of the interdependent layers")
+        self.initialize_speedup()
+        training=self.bound_model.training
         _logger.info("infer module masks...")
         self.infer_modules_masks()
+        _logger.info('resolve the mask conflict')
+        self.resolve_conflicts()
         _logger.info("replace compressed modules...")
-        self.replace_compressed_modules()
+        # self.replace_compressed_modules()
         self.bound_model.train(training)
         _logger.info("speedup done")
