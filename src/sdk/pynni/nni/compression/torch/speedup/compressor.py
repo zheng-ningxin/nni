@@ -11,6 +11,7 @@ from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
 from .constants import AutoMaskInferenceType
 _logger = logging.getLogger(__name__)
+_logger.setLevel(logging.DEBUG)
 
 
 def get_module_by_name(model, module_name):
@@ -41,14 +42,14 @@ class ModelSpeedup:
     This class is to speedup the model with provided weight mask
     """
 
-    def __init__(self, model, dummy_input, masks_file, map_location=None):
+    def __init__(self, model, dummy_input, masks_file):
         """
         Parameters
         ----------
         model : pytorch model
             The model user wants to speed up
         dummy_input : pytorch tensor
-            The dummy input for ```jit.trace```, users should put it on right device before pass in
+            The dummy input for ```jit.trace```, users should put it on the right device before pass in
         masks_file : str
             The path of user provided mask file
         map_location : str
@@ -57,7 +58,6 @@ class ModelSpeedup:
         from nni._graph_utils import build_module_graph
 
         self.bound_model = model
-        self.masks = torch.load(masks_file, map_location)
         self.inferred_masks = dict()  # key: module_name, value: ModuleMasks
         self.dummy_input = dummy_input
         self.torch_graph = build_module_graph(model, dummy_input)
@@ -68,6 +68,10 @@ class ModelSpeedup:
         # we need the dummy_input to infer the mask automaticlly, so we save
         # the indexes from tensor's debugname to the torch._C.Value object.
         self.debugname_to_value = {}
+        # device to run the forward inference
+        self.device = dummy_input.device
+        # load the mask tensor to the same device with the dummy_input
+        self.masks = torch.load(masks_file, str(self.device))
 
     # def infer_module_mask(self, module_name, last_module, mask=None, in_shape=None, out_shape=None):
     #     """
@@ -169,24 +173,34 @@ class ModelSpeedup:
             List of mask tensors. The mask tensor of the output tensors, the length of this
             list should be the same with the number of the output tensors.
         """
+        _logger.debug('Prepare auto mask inference for node: %s',
+                      node.unique_name)
         module_name = node.name
         unique_name = node.unique_name
         # prepare the inputs and outputs mask for this node,
         # if there is already a mask in self.masks, then use
         # the original mask tensor, else create a new one.
         inputs_name = node.inputs
+
         outputs_name = node.outputs
         # build the dummy_input, in_masks the target node
         dummy_input = []
         in_mask = []
         for _input in inputs_name:
             v_node = self.debugname_to_value[_input]
-            if isinstance(v_node.type(), torch._C.TensorType):
+            if isinstance(v_node.type(), torch._C.TensorType) and \
+                'prim::GetAttr' not in v_node.node().kind():
+                # This value node should not be created by the prim::GetAttr, such as
+                # weight and bias tensor should be skipped
+
+                print(v_node.type().sizes())
+                print(v_node)
+                print(v_node.node())
                 shape = tuple(v_node.type().sizes())
                 # Note: cannot support the value-dependent models
-                dummy_input.append(torch.rand(shape))
+                dummy_input.append(torch.rand(shape).to(self.device))
                 if _input not in self.masks:
-                    self.masks[_input] = torch.ones(shape)
+                    self.masks[_input] = torch.ones(shape).to(self.device)
                 in_mask.append(self.masks[_input])
 
         # prepare the parameter mask tensors
@@ -201,7 +215,7 @@ class ModelSpeedup:
             if isinstance(v_node.type(), torch._C.TensorType):
                 shape = tuple(v_node.type().sizes())
                 if _output not in self.masks:
-                    _output_mask = torch.ones(shape)
+                    _output_mask = torch.ones(shape).to(self.device)
                     self.masks[_output] = _output_mask
                 output_mask.append(self.masks[_output])
         return dummy_input, in_mask, weight_mask, output_mask
@@ -211,6 +225,7 @@ class ModelSpeedup:
         Update the mask for the target node.
         """
         module_name = node.name
+        _logger.info('Update mask for ', module_name)
         unique_name = node.unique_name
         if unique_name in self.auto_inferences:
             # if the auto inference object already in self.auto_inference, then
@@ -238,7 +253,7 @@ class ModelSpeedup:
                 func, dummy_input, in_masks, weight_mask, output_mask)
         else:
             # node.type == 'module':
-            module = get_module_by_name(self.bound_model, module_name)
+            _, module = get_module_by_name(self.bound_model, module_name)
             _auto_infer = AutoMaskInferenceClass(
                 module, dummy_input, in_masks, weight_mask, output_mask)
         self.auto_inferences[unique_name] = _auto_infer
@@ -349,17 +364,16 @@ class ModelSpeedup:
         # initialize the self.debugname_to_value
         # build a mapping table from the debug name of the tensor
         # to its value node in the graph
-        traced_graph=self.torch_graph.trace.graph
+        traced_graph = self.torch_graph.trace.graph
         for node in traced_graph.nodes():
             for _input in node.inputs():
-                debug_name=_input.debugName()
+                debug_name = _input.debugName()
                 if debug_name not in self.debugname_to_value:
-                    self.debugname_to_value[debug_name]=_input
+                    self.debugname_to_value[debug_name] = _input
             for _output in node.outputs():
-                debug_name=_output.debugName()
+                debug_name = _output.debugName()
                 if debug_name not in self.debugname_to_value:
-                    self.debugname_to_value[debug_name]=_output
-
+                    self.debugname_to_value[debug_name] = _output
 
     def speedup_model(self):
         """
@@ -369,7 +383,7 @@ class ModelSpeedup:
 
         _logger.info("start to speed up the model")
         self.initialize_speedup()
-        training=self.bound_model.training
+        training = self.bound_model.training
         _logger.info("infer module masks...")
         self.infer_modules_masks()
         _logger.info('resolve the mask conflict')

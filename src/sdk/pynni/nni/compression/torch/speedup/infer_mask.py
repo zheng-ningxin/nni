@@ -239,7 +239,7 @@ class AutoMaskInferenceZero(AutoMaskInference):
         # get the origin output tensor
         _ori_out = self.module(*self.dummy_input)
         # apply the mask for the input tensor and the weight tensor
-        self._apply_mask()
+        self.apply_mask()
         _new_out = self.module(*self.dummy_input)
         _new_zeors = _new_out == 0
         _ori_zeros = _ori_out == 0
