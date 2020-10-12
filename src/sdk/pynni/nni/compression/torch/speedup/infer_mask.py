@@ -254,7 +254,11 @@ class AutoMaskInferenceZero(AutoMaskInference):
         """
         Infer and update the output mask.
         """
+        
         _out_m = self._forwards_outmask()
+        print(_out_m.size())
+        print(self.output_mask.size())
+        
         self.output_mask *= _out_m
 
 

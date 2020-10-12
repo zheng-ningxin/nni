@@ -193,9 +193,9 @@ class ModelSpeedup:
                 # This value node should not be created by the prim::GetAttr, such as
                 # weight and bias tensor should be skipped
 
-                print(v_node.type().sizes())
-                print(v_node)
-                print(v_node.node())
+                # print(v_node.type().sizes())
+                # print(v_node)
+                # print(v_node.node())
                 shape = tuple(v_node.type().sizes())
                 # Note: cannot support the value-dependent models
                 dummy_input.append(torch.rand(shape).to(self.device))
@@ -225,7 +225,7 @@ class ModelSpeedup:
         Update the mask for the target node.
         """
         module_name = node.name
-        _logger.info('Update mask for ', module_name)
+        _logger.info('Update mask for %s', module_name)
         unique_name = node.unique_name
         if unique_name in self.auto_inferences:
             # if the auto inference object already in self.auto_inference, then
