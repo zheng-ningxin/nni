@@ -150,12 +150,9 @@ class ModelSpeedup:
     #         for _module_name in successors:
     #             self.infer_module_mask(_module_name, module_name, in_shape=output_cmask)
 
-    def _prepare_auto_inference(self, node):
+    def _prepare_dummy_input(self, node):
         """
-        Prepare the dummy_input and the input mask, weight mask, output mask
-        for the target node. If the mask tensor is alread created by other nodes,
-        then read the mask tensor from self.mask, else create a all-ones mask tensor
-        and put it in self.masks.
+        Prepare the dummy_input for the auto mask inference.
         Parameters
         ----------
         node: NodePyGroup
@@ -163,15 +160,7 @@ class ModelSpeedup:
         -------
         dummy_input: list
             List of tensors that will be used as input for the target node.
-        in_mask: list
-            List of mask tensors. The length of in_mask is same with dummy_input.
-        weight_mask: dict
-            Dict object that stores the weight mask of the module, if the node corresponds
-            a function, then weight_mask is {}, else the key is the parameter name(such as
-            weight, bias), and the value is the mask tensor for the corresponding parameters.
-        output_mask: list
-            List of mask tensors. The mask tensor of the output tensors, the length of this
-            list should be the same with the number of the output tensors.
+ 
         """
         _logger.debug('Prepare auto mask inference for node: %s',
                       node.unique_name)
@@ -181,16 +170,13 @@ class ModelSpeedup:
         # if there is already a mask in self.masks, then use
         # the original mask tensor, else create a new one.
         inputs_name = node.inputs
-
-        outputs_name = node.outputs
         # build the dummy_input, in_masks the target node
         dummy_input = []
-        in_mask = []
         for _input in inputs_name:
             v_node = self.debugname_to_value[_input]
             if isinstance(v_node.type(), torch._C.TensorType) and \
                 'prim::GetAttr' not in v_node.node().kind():
-                # This value node should not be created by the prim::GetAttr, such as
+                # Filter the value nodes created by the prim::GetAttr, such as
                 # weight and bias tensor should be skipped
 
                 # print(v_node.type().sizes())
@@ -198,27 +184,12 @@ class ModelSpeedup:
                 # print(v_node.node())
                 shape = tuple(v_node.type().sizes())
                 # Note: cannot support the value-dependent models
-                dummy_input.append(torch.rand(shape).to(self.device))
+                dummy_input.append((torch.rand(shape).to(self.device), _input))
                 if _input not in self.masks:
+                    # if the input tensor doesn't have masks, then create one
                     self.masks[_input] = torch.ones(shape).to(self.device)
-                in_mask.append(self.masks[_input])
 
-        # prepare the parameter mask tensors
-        weight_mask = dict()
-        if module_name in self.masks:
-            weight_mask = self.masks[module_name]
-
-        # prepare the output mask tensors
-        output_mask = []
-        for _output in outputs_name:
-            v_node = self.debugname_to_value[_output]
-            if isinstance(v_node.type(), torch._C.TensorType):
-                shape = tuple(v_node.type().sizes())
-                if _output not in self.masks:
-                    _output_mask = torch.ones(shape).to(self.device)
-                    self.masks[_output] = _output_mask
-                output_mask.append(self.masks[_output])
-        return dummy_input, in_mask, weight_mask, output_mask
+        return dummy_input
 
     def _update_mask(self, node):
         """

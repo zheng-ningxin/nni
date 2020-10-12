@@ -16,24 +16,44 @@ class AutoMaskInference:
             module)
         assert callable(module), errmsg
         self.module = module
+
+        # Initialize the dummy_input
         if isinstance(dummy_input, list):
             # if there are multiple input variables
-            assert isinstance(in_masks, list)
             self.dummy_input = dummy_input
-            self.in_masks = in_masks
         else:
             # if there is only one input variable
             self.dummy_input = [dummy_input]
-            self.in_masks = [in_masks]
+
+        # Initialize the masks for input tensors
+        if in_masks is None:
+            # if the input mask is not given
+            self.in_masks = [None] * len(self.dummy_input)
         for in_id, _ in enumerate(self.in_masks):
-            if self.in_masks[in_id] is None and isinstance(self.dummy_input[in_id], torch.Tensor):
+            if self.in_masks[in_id] is None and \
+                    isinstance(self.dummy_input[in_id], torch.Tensor):
                 # if the input mask is None then create a all-ones mask for corresponding input tensor
                 self.in_masks[in_id] = torch.ones_like(self.dummy_input[in_id])
+                # ones_like will put the created mask on the same device with the dummy_input
+
+        # Initialize the mask for output tensors
+        self.output = self.module(*dummy_input)
         if output_mask is not None:
+            # assume the given output mask is right
             self.output_mask = output_mask
         else:
-            _tmp_out = self.module(*dummy_input)
-            self.output_mask = torch.ones_like(_tmp_out)
+            errmsg = 'Only support the module/function that returns tensor/tuple of tensors/list of tensors'
+            if isinstance(self.output, torch.Tensor):
+                self.output_mask = torch.ones_like(self.output)
+            elif isinstance(self.output, list) or isinstance(self.output, tuple):
+                self.output_mask = []
+                for o_tensor in self.output:
+                    assert isinstance(o_tensor, torch.Tensor), errmsg
+                    self.output_mask.append(torch.ones_like(o_tensor))
+            else:
+                raise ValueError(errmsg)
+
+        # Initialize the parameter mask for the parameters
         self.weights = {}
         self.weight_mask = {}
         if weight_mask:
@@ -229,7 +249,6 @@ class AutoMaskInferenceZero(AutoMaskInference):
                         flag = True
         return in_mask
 
-
     def _forwards_outmask(self):
         """
         Infer the output mask for the output tensor.
@@ -249,18 +268,16 @@ class AutoMaskInferenceZero(AutoMaskInference):
         out_mask[_new_zeors] = 0
         return out_mask
 
-
     def update_output_mask(self):
         """
         Infer and update the output mask.
         """
-        
+
         _out_m = self._forwards_outmask()
         print(_out_m.size())
         print(self.output_mask.size())
-        
-        self.output_mask *= _out_m
 
+        self.output_mask *= _out_m
 
     def update_weight_mask(self):
         """
@@ -302,15 +319,14 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
         for tid, in_tensor in enumerate(self.dummy_input):
             if isinstance(in_tensor, torch.Tensor) and self.in_masks[tid] is not None:
                 nan_mask = self.in_masks[tid].clone().detach()
-                nan_mask[nan_mask==0] = float('nan')
+                nan_mask[nan_mask == 0] = float('nan')
                 in_tensor.data *= nan_mask
         # apply the weight mask
         for name, para in self.module.named_parameters():
             if name in self.weight_mask:
                 nan_mask = self.weight_mask[name].clone().detach()
-                nan_mask[nan_mask==0] = float('nan')
+                nan_mask[nan_mask == 0] = float('nan')
                 para.data *= nan_mask
-
 
     def _forwards_outmask(self):
         """
