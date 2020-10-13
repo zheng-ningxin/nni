@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 _logger = logging.getLogger(__name__)
-_logger.setLevel(logging.DEBUG)
+_logger.setLevel(logging.INFO)
 
 
 class AutoMaskInference:
@@ -26,9 +26,7 @@ class AutoMaskInference:
             self.dummy_input = [dummy_input]
 
         # Initialize the masks for input tensors
-        if in_masks is None:
-            # if the input mask is not given
-            self.in_masks = [None] * len(self.dummy_input)
+        self.in_masks = in_masks if in_masks is not None else [None] * len(self.dummy_input)
         for in_id, _ in enumerate(self.in_masks):
             if self.in_masks[in_id] is None and \
                     isinstance(self.dummy_input[in_id], torch.Tensor):
@@ -99,7 +97,7 @@ class AutoMaskInference:
         # also zero the gradient of the input tensors
         for tensor in self.dummy_input:
             if isinstance(tensor, torch.Tensor):
-                if tensor.grad:
+                if tensor.grad is not None:
                     tensor.grad.data.zero_()
 
 
@@ -161,7 +159,7 @@ class AutoMaskInferenceZero(AutoMaskInference):
         # we need to trace the mask relationship by the gradient
         if isinstance(self.module, nn.Module):
             self.module.train()
-        self._zero_grad()
+        self.zero_grad()
         # enable the grad for the target tensor
         target_tensor.requires_grad_()
         assert isinstance(target_tensor, torch.Tensor)
@@ -171,7 +169,7 @@ class AutoMaskInferenceZero(AutoMaskInference):
         # before call the backward, following operations should not change
         # the gradient dependent chain
         with torch.no_grad():
-            self._random_init()
+            self.random_init()
             # set the masked values to zero and the unmasked valued to positive
             # values
             for _id, tensor in enumerate(self.dummy_input):
@@ -274,8 +272,8 @@ class AutoMaskInferenceZero(AutoMaskInference):
         """
 
         _out_m = self._forwards_outmask()
-        print(_out_m.size())
-        print(self.output_mask.size())
+        # print(_out_m.size())
+        # print(self.output_mask.size())
 
         self.output_mask *= _out_m
 

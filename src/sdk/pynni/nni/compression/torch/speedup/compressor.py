@@ -71,7 +71,11 @@ class ModelSpeedup:
         # device to run the forward inference
         self.device = dummy_input.device
         # load the mask tensor to the same device with the dummy_input
+        # self.masks save the mask tensors pruned by the user and the infered
+        # masks of the others modules
         self.masks = torch.load(masks_file, str(self.device))
+        # self.internal_result save the internal output of the submodules
+        self.internal_result = {}
 
     # def infer_module_mask(self, module_name, last_module, mask=None, in_shape=None, out_shape=None):
     #     """
@@ -160,12 +164,11 @@ class ModelSpeedup:
         -------
         dummy_input: list
             List of tensors that will be used as input for the target node.
- 
+
         """
         _logger.debug('Prepare auto mask inference for node: %s',
                       node.unique_name)
-        module_name = node.name
-        unique_name = node.unique_name
+
         # prepare the inputs and outputs mask for this node,
         # if there is already a mask in self.masks, then use
         # the original mask tensor, else create a new one.
@@ -173,40 +176,45 @@ class ModelSpeedup:
         # build the dummy_input, in_masks the target node
         dummy_input = []
         for _input in inputs_name:
-            v_node = self.debugname_to_value[_input]
-            if isinstance(v_node.type(), torch._C.TensorType) and \
-                'prim::GetAttr' not in v_node.node().kind():
-                # Filter the value nodes created by the prim::GetAttr, such as
-                # weight and bias tensor should be skipped
+            if _input not in self.internal_result:
+                # if the input debug name is not in self.internal_result,
+                # then this node isn't a output tensor of any predecessor
+                # nodes. This node is a attribute of the submodule, such as
+                # weight or bias, etc. We will skip these tensors.
+                # If we don't want this specific judgement here, we can merge
+                # the `prim::GetAttr` node of the weight/bias tensor into the key
+                # node, such as `conv`.
+                # This is caused by the `meage_module_node` function in the
+                # _graph_utils.py, because it doesn't merge the prim::GetAttr
+                # node into the key node. In current version of _graph_utils.py,
+                # we will only merge the nodes that have same scope name, however,
+                # the scope name of the correponding prim::GetAttr node of `weight` tensor
+                # is None. 
+                continue
+            dummy_input.append((self.internal_result[_input] , _input))
 
-                # print(v_node.type().sizes())
-                # print(v_node)
-                # print(v_node.node())
-                shape = tuple(v_node.type().sizes())
-                # Note: cannot support the value-dependent models
-                dummy_input.append((torch.rand(shape).to(self.device), _input))
-                if _input not in self.masks:
-                    # if the input tensor doesn't have masks, then create one
-                    self.masks[_input] = torch.ones(shape).to(self.device)
+            # v_node = self.debugname_to_value[_input]
+            # if isinstance(v_node.type(), torch._C.TensorType) and \
+            #         'prim::GetAttr' not in v_node.node().kind():
+            #     # Filter the value nodes created by the prim::GetAttr, such as
+            #     # weight and bias tensor should be skipped
+
+            #     # print(v_node.type().sizes())
+            #     # print(v_node)
+            #     # print(v_node.node())
+            #     shape = tuple(v_node.type().sizes())
+            #     # Note: cannot support the value-dependent models
+            #     dummy_input.append((torch.rand(shape).to(self.device), _input))
+            #     if _input not in self.masks:
+            #         # if the input tensor doesn't have masks, then create one
+            #         self.masks[_input] = torch.ones(shape).to(self.device)
 
         return dummy_input
 
-    def _update_mask(self, node):
+    def update_mask(self, node):
         """
         Update the mask for the target node.
         """
-        module_name = node.name
-        _logger.info('Update mask for %s', module_name)
-        unique_name = node.unique_name
-        if unique_name in self.auto_inferences:
-            # if the auto inference object already in self.auto_inference, then
-            # directly use the previous one
-            self.auto_inferences[unique_name].update()
-            return
-        # if it is the first visit to this node, then we create a corresponding auto
-        # mask inference object for this node
-        dummy_input, in_masks, weight_mask, output_mask = self._prepare_auto_inference(
-            node)
         # get the corresponding auto mask inference class according
         # to the config
         if node.op_type not in AutoMaskInferenceType:
@@ -214,21 +222,70 @@ class ModelSpeedup:
                 auto mask inference type in constants.py!' % str(node.op_type)
             raise Exception(errmsg)
         AutoMaskInferenceClass = AutoMaskInferenceType[node.op_type]
+
         # this name is consistent with the name returned by named_modules()
+        module_name = node.name
+        _logger.info('Update mask for %s', module_name)
+        unique_name = node.unique_name
+        if unique_name in self.auto_inferences:
+            # if the auto inference object already in self.auto_inference, then
+            # directly update the previous one
+            self.auto_inferences[unique_name].update()
+            return
+        # if it is the first visit to this node, then we create a corresponding auto
+        # mask inference object for this node
+        inputs = self._prepare_dummy_input(node)
+        input_debugname = [x[1] for x in inputs]
+        dummy_input = [x[0] for x in inputs]
+        # get the input mask from self.masks
+        # Note: the input mask of the successor nodes are
+        # already created by the predecessor node
+        in_masks = [self.masks[debugname] for debugname in input_debugname]
         if node.type == 'func':
             # we cannot get the runable function directly from the jit traced
             # graph, so we translate it back to python function
             func = jit_to_python_function(node)
             # function doesn't have weights
-            _auto_infer = AutoMaskInferenceClass(
-                func, dummy_input, in_masks, weight_mask, output_mask)
+            _auto_infer = AutoMaskInferenceClass(func, dummy_input, in_masks)
         else:
-            # node.type == 'module':
+            # node.type == 'module'
+            weight_mask = None
+            if module_name in self.masks:
+                weight_mask = self.masks[module_name]
             _, module = get_module_by_name(self.bound_model, module_name)
             _auto_infer = AutoMaskInferenceClass(
-                module, dummy_input, in_masks, weight_mask, output_mask)
+                module, dummy_input, in_masks, weight_mask)
         self.auto_inferences[unique_name] = _auto_infer
         _auto_infer.update()
+        # update the mask tensor and the internal output of the submodules
+        # after manually unpack the tuple/list of tensors, the number of the outputs
+        # of each node should always be one
+        assert len(node.outputs) == 1, "The number of the outputs of %s is not 1" % module_name 
+        out_debugname = node.outputs[0]
+        # update the output mask into self.masks
+        self.masks[out_debugname] = _auto_infer.output_mask
+        # update the output result into self.internal_result, so that
+        # the successor nodes can take these output tensors as inputs.
+        self.internal_result[out_debugname] = _auto_infer.output
+        # update the parameter mask of the node
+        self.masks[module_name].update(_auto_infer.weight_mask)
+
+    def _vnode_to_value(self, c_node):
+        """
+        translate the C Value node into the values/tensors.
+        """
+        errmsg = "Only support the torch._C.Value type"
+        assert isinstance(c_node, torch._C.Value), errmsg
+        if isinstance(c_node.type(), torch._C.TensorType):
+            shape = tuple(c_node.type().sizes())
+            return torch.rand(shape).to(self.device)
+        else:
+            value = c_node.toIValue()
+            # TODO support more kinds of value node
+            errmsg = "Doesn't support convert %s to values", str(cnode.type())
+            # currently only support the tensors and constant values
+            assert value is not None, errmsg
+            return value
 
     def infer_modules_masks(self):
         """
@@ -245,6 +302,14 @@ class ModelSpeedup:
         for name, nodeio in self.torch_graph.nodes_py.nodes_io.items():
             if nodeio.input_or_output == 'input':
                 graph_input.append((name, nodeio))
+                # also put the graph input tensor into the internal_result
+                # TODO if we can find the corresponding relation between the value node
+                # and the dummy_inputs, we can use the inputs value in the dummy_input
+                value = self._vnode_to_value(self.debugname_to_value[name])
+                self.internal_result[name] = value
+                # create the mask tensor for the input value
+                if isinstance(self.internal_result[name], torch.Tensor):
+                    self.masks[name] = torch.ones_like(value)
             elif nodeio.input_or_output == 'output':
                 graph_output.append((name, nodeio))
         # count the degree for the node in the graph
@@ -262,11 +327,11 @@ class ModelSpeedup:
         while not visit_queue.empty():
             curnode = visit_queue.get()
             # forward mask inference for curnode
-            self._update_mask(curnode)
+            self.update_mask(curnode)
             successors = self.torch_graph.find_successors(curnode.unique_name)
             for successor in successors:
-                in_degree[successor.unique_name] -= 1
-                if in_degree[successor.unique_name] == 0:
+                in_degree[successor] -= 1
+                if in_degree[successor] == 0:
                     visit_queue.put(successor)
         # backward mask inference
         for node in out_degree:
@@ -274,7 +339,7 @@ class ModelSpeedup:
                 visit_queue.put(node)
         while not visit_queue.empty():
             curnode = visit_queue.get()
-            self._update_mask(curnode)
+            self.update_mask(curnode)
             predecessors = self.torch_graph.find_predecessors(
                 curnode.unique_name)
             for predecessor in predecessors:
