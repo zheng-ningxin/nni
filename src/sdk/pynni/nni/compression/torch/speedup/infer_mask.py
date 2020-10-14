@@ -232,9 +232,22 @@ class AutoMaskInferenceZero(AutoMaskInference):
         elif isinstance(output, list) or isinstance(output, tuple):
             for tid, t_out in enumerate(output):
                 t_out.backward(self.output_mask[tid])
+        print('\n\nself.output')
+        print(self.output)
+        print('\n\nself.output_mask\n\n')
+        print(self.output_mask)
+        print('\n\nself.dummy_input\n\n')
+        print(self.dummy_input)
+        print('\n\noutput\n\n')
+        print(output)
+        
 
+        # print(self.weight)
         # update the sparsity of the paramters
         for para_name in self.weights:
+            print("!!!!!!!!!!!!")
+            print(para_name)
+            print(self.weights[para_name].grad)
             grad_zero = self.weights[para_name].grad.data == 0
             self.weight_mask[para_name][grad_zero] = 0
 

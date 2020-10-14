@@ -231,6 +231,7 @@ class ModelSpeedup:
             # if the auto inference object already in self.auto_inference, then
             # directly update the previous one
             # self.auto_inferences[unique_name].update()
+            _logger.info('Update the indirect sparsity for the %s', unique_name)
             self.auto_inferences[unique_name].update_indirect_sparsity()
             return
         # if it is the first visit to this node, then we create a corresponding auto
@@ -270,7 +271,7 @@ class ModelSpeedup:
         # the successor nodes can take these output tensors as inputs.
         self.internal_result[out_debugname] = _auto_infer.output
         # update the parameter mask of the node
-        print(self.masks.keys())
+        # print(self.masks.keys())
         self.masks[module_name] = _auto_infer.weight_mask
 
     def _vnode_to_value(self, c_node):
