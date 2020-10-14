@@ -26,7 +26,8 @@ class AutoMaskInference:
             self.dummy_input = [dummy_input]
 
         # Initialize the masks for input tensors
-        self.in_masks = in_masks if in_masks is not None else [None] * len(self.dummy_input)
+        self.in_masks = in_masks if in_masks is not None else [
+            None] * len(self.dummy_input)
         for in_id, _ in enumerate(self.in_masks):
             if self.in_masks[in_id] is None and \
                     isinstance(self.dummy_input[in_id], torch.Tensor):
@@ -60,7 +61,7 @@ class AutoMaskInference:
             # the function should not has parameters
             # get all the parameter tensors of the target module
             for name, para in module.named_parameters():
-                self.weights[name] = para.data
+                self.weights[name] = para
                 if name not in self.weight_mask:
                     self.weight_mask[name] = torch.ones_like(para.data)
 
@@ -79,26 +80,48 @@ class AutoMaskInference:
     def apply_mask(self):
         raise NotImplementedError
 
+    def update_direct_sparsity(self):
+        raise NotImplementedError
+
+    def update_indirect_sparsity(self):
+        raise NotImplementedError
+
     def random_init(self, start=1, end=10):
         """
         Random initialize the weights of the module. The value of
         the tensor will not affect the mask auto inference.
         """
-        for tensor in self.dummy_input:
-            if isinstance(tensor, torch.Tensor):
-                nn.init.uniform_(tensor.data, start, end)
-        for _, para in self.module.named_parameters():
-            nn.init.uniform_(para.data, start, end)
+        with torch.no_grad():
+            for tensor in self.dummy_input:
+                if isinstance(tensor, torch.Tensor):
+                    nn.init.uniform_(tensor.data, start, end)
+            for para in self.weights:
+                nn.init.uniform_(self.weights[para].data, start, end)
 
     def zero_grad(self):
-        # set the weight's gradient to zero
-        if isinstance(self.module, nn.Module):
-            self.module.zero_grad()
-        # also zero the gradient of the input tensors
-        for tensor in self.dummy_input:
-            if isinstance(tensor, torch.Tensor):
-                if tensor.grad is not None:
-                    tensor.grad.data.zero_()
+        """
+        Set the gradient of the weight, input tensor to be zeros.
+        """
+        with torch.no_grad():
+            # set the weight's gradient to zero
+            if isinstance(self.module, nn.Module):
+                self.module.zero_grad()
+            # also zero the gradient of the input tensors
+            for tensor in self.dummy_input:
+                if isinstance(tensor, torch.Tensor):
+                    if tensor.grad is not None:
+                        tensor.grad.data.zero_()
+
+    def requires_grad_(self, flag=True):
+        """
+        Set the requires_grad of input tensor and parameters to flag.
+        """
+        for t_in in self.dummy_input:
+            if isinstance(t_in, torch.Tensor):
+                # enable the auto gradient
+                t_in.requires_grad_(flag)
+        for para_name in self.weights:
+            self.weights[para_name].requires_grad_(flag)
 
 
 class AutoMaskInferenceZero(AutoMaskInference):
@@ -129,14 +152,97 @@ class AutoMaskInferenceZero(AutoMaskInference):
         """
         Set the masked values to zero.
         """
-        # apply the input mask
-        for tid, in_tensor in enumerate(self.dummy_input):
-            if isinstance(in_tensor, torch.Tensor) and self.in_masks[tid] is not None:
-                in_tensor.data *= self.in_masks[tid]
-        # apply the weight mask
-        for name, para in self.module.named_parameters():
-            if name in self.weight_mask:
-                para.data *= self.weight_mask[name].data
+        with torch.no_grad():
+            # apply the input mask
+            for tid, in_tensor in enumerate(self.dummy_input):
+                if isinstance(in_tensor, torch.Tensor) and self.in_masks[tid] is not None:
+                    in_tensor.data *= self.in_masks[tid]
+            # apply the weight mask
+            for para in self.weights:
+                if para in self.weight_mask:
+                    self.weights[para].data *= self.weight_mask[para].data
+
+    def clac_out_sparsity(self):
+        """
+        Calculate the output sparsity.
+        """
+        self.random_init()
+        # we don't need the gradient in the forward inference
+        out_mask = None
+        with torch.no_grad():
+            ori_out = self.module(*self.dummy_input)
+            # apply the mask for the input tensor and the weight tensor
+            self.apply_mask()
+            new_out = self.module(*self.dummy_input)
+            if isinstance(ori_out, torch.Tensor):
+                new_zeors = new_out == 0
+                ori_zeros = ori_out == 0
+                # only mask the newly added zeros
+                new_zeors[ori_zeros] = False
+                out_mask = torch.ones_like(ori_out)
+                out_mask[new_zeors] = 0
+            elif isinstance(ori_out, tuple) or isinstance(ori_out, list):
+                out_mask = []
+                for ori_tensor, new_tensor in zip(ori_out, new_out):
+                    new_zeros = new_tensor == 0
+                    ori_zeros = ori_tensor == 0
+                    new_zeros[ori_zeros] = False
+                    _sparsity = torch.ones_like(ori_tensor)
+                    _sparsity[new_zeros] = 0
+                    out_mask.append(_sparsity)
+            else:
+                _logger.warn(
+                    'Only support the OP whose output is tensor/tuple of tensor/list of tensor')
+        return out_mask
+
+    def update_direct_sparsity(self):
+        with torch.no_grad():
+            out_sparsity = self.clac_out_sparsity()
+            if isinstance(out_sparsity, torch.Tensor):
+                assert isinstance(self.output_mask, torch.Tensor)
+                self.output_mask *= out_sparsity
+            elif isinstance(out_sparsity, list):
+                for i, _ in enumerate(out_sparsity):
+                    self.output_mask[i] *= out_sparsity[i]
+            else:
+                _logger.warn('Update the output sparsity Failed!')
+
+    def update_indirect_sparsity(self):
+        """
+        Find those hidden sparsity through gradient.
+        """
+        # update the output mask
+        if isinstance(self.output, torch.Tensor) and self.output.grad:
+            # if output have gradient which means this node has successor
+            # nodes and the successor nodes have already update their indirect
+            # sparsity
+            _grad_zero = self.output.grad.data == 0
+            self.output_mask[_grad_zero] = 0
+        elif isinstance(self.output, tuple) or isinstance(self.output, list):
+            # TODO
+            pass
+        self.requires_grad_(True)
+        # Forward inference with auto gradient enabled
+        # Note: tensors that need gradient cannot be used in the in-place operator
+        tmp_dummy_input = [x.clone() if isinstance(x, torch.Tensor) else x for x in self.dummy_input]
+        output = self.module(*tmp_dummy_input)
+        # Note: output maybe tensor or list/tuple of tensors
+        if isinstance(output, torch.Tensor):
+            output.backward(self.output_mask)
+        elif isinstance(output, list) or isinstance(output, tuple):
+            for tid, t_out in enumerate(output):
+                t_out.backward(self.output_mask[tid])
+
+        # update the sparsity of the paramters
+        for para_name in self.weights:
+            grad_zero = self.weights[para_name].grad.data == 0
+            self.weight_mask[para_name][grad_zero] = 0
+
+        print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
+
+    def update_sparsity(self):
+        self.update_direct_sparsity()
+        self.update_indirect_sparsity
 
     def _inputs_internal(self, target_tensor):
         """
@@ -184,6 +290,8 @@ class AutoMaskInferenceZero(AutoMaskInference):
         # now all the positions that the gradient equals to zeros
         # can be masked in the target tensor
         grad = target_tensor.grad.data
+        # shut down the gradient
+        # target_tensor.requires_grad_(False)
         return grad == 0
 
     def _backwards_nan(self, in_tensor):
@@ -299,6 +407,7 @@ class AutoMaskInferenceZero(AutoMaskInference):
                 self.in_masks[in_id] *= self._backwards_nan(_input)
 
     def update(self):
+        # with torch.autograd.set_detect_anomaly(True):
         self.update_output_mask()
         self.update_input_mask()
         self.update_weight_mask()
@@ -313,18 +422,19 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
         """
         Set the masked values to Nan.
         """
-        # apply the input mask
-        for tid, in_tensor in enumerate(self.dummy_input):
-            if isinstance(in_tensor, torch.Tensor) and self.in_masks[tid] is not None:
-                nan_mask = self.in_masks[tid].clone().detach()
-                nan_mask[nan_mask == 0] = float('nan')
-                in_tensor.data *= nan_mask
-        # apply the weight mask
-        for name, para in self.module.named_parameters():
-            if name in self.weight_mask:
-                nan_mask = self.weight_mask[name].clone().detach()
-                nan_mask[nan_mask == 0] = float('nan')
-                para.data *= nan_mask
+        with torch.no_grad():
+            # apply the input mask
+            for tid, in_tensor in enumerate(self.dummy_input):
+                if isinstance(in_tensor, torch.Tensor) and self.in_masks[tid] is not None:
+                    nan_mask = self.in_masks[tid].clone().detach()
+                    nan_mask[nan_mask == 0] = float('nan')
+                    in_tensor.data *= nan_mask
+            # apply the weight mask
+            for para in self.weights:
+                if para in self.weight_mask:
+                    nan_mask = self.weight_mask[para].clone().detach()
+                    nan_mask[nan_mask == 0] = float('nan')
+                    self.weights[para].data *= nan_mask
 
     def _forwards_outmask(self):
         """
@@ -359,3 +469,41 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
         self.update_output_mask()
         self.update_input_mask()
         self.update_weight_mask()
+
+    def update_direct_sparsity(self):
+        with torch.no_grad():
+            out_sparsity = self.clac_out_sparsity()
+            if isinstance(out_sparsity, torch.Tensor):
+                assert isinstance(self.output_mask, torch.Tensor)
+                self.output_mask *= out_sparsity
+            elif isinstance(out_sparsity, list):
+                for i, _ in enumerate(out_sparsity):
+                    self.output_mask[i] *= out_sparsity[i]
+            else:
+                _logger.warn('Update direct sparsity failed!')
+
+    def clac_out_sparsity(self):
+        # in case the dummy_input which created by the predecessors
+        # is not clean (For example still have nan in it)
+        self.random_init()
+        self.apply_mask()
+        out_mask = None
+        with torch.no_grad():
+            new_out = self.module(*self.dummy_input)
+            if isinstance(new_out, torch.Tensor):
+                nan_pos = torch.isnan(new_out)
+                out_mask = torch.ones_like(new_out)
+                out_mask[nan_pos] = 0
+            elif isinstance(new_out, list) or isinstance(new_out, tuple):
+                out_mask = []
+                for t_out in new_out:
+                    assert isinstance(t_out, torch.Tensor)
+                    nan_pos = torch.isnan(t_out)
+                    tmp_mask = torch.ones_like(t_out)
+                    tmp_mask[nan_pos] = 0
+                    out_mask.append(tmp_mask)
+            else:
+                _logger.warn(
+                    'Only support the OP whose output is tensor/list of tensors')
+
+        return out_mask

@@ -189,9 +189,9 @@ class ModelSpeedup:
                 # node into the key node. In current version of _graph_utils.py,
                 # we will only merge the nodes that have same scope name, however,
                 # the scope name of the correponding prim::GetAttr node of `weight` tensor
-                # is None. 
+                # is None.
                 continue
-            dummy_input.append((self.internal_result[_input] , _input))
+            dummy_input.append((self.internal_result[_input].detach(), _input))
 
             # v_node = self.debugname_to_value[_input]
             # if isinstance(v_node.type(), torch._C.TensorType) and \
@@ -230,7 +230,8 @@ class ModelSpeedup:
         if unique_name in self.auto_inferences:
             # if the auto inference object already in self.auto_inference, then
             # directly update the previous one
-            self.auto_inferences[unique_name].update()
+            # self.auto_inferences[unique_name].update()
+            self.auto_inferences[unique_name].update_indirect_sparsity()
             return
         # if it is the first visit to this node, then we create a corresponding auto
         # mask inference object for this node
@@ -256,7 +257,8 @@ class ModelSpeedup:
             _auto_infer = AutoMaskInferenceClass(
                 module, dummy_input, in_masks, weight_mask)
         self.auto_inferences[unique_name] = _auto_infer
-        _auto_infer.update()
+        # _auto_infer.update()
+        _auto_infer.update_direct_sparsity()
         # update the mask tensor and the internal output of the submodules
         # after manually unpack the tuple/list of tensors, the number of the outputs
         # of each node should always be one
@@ -268,7 +270,8 @@ class ModelSpeedup:
         # the successor nodes can take these output tensors as inputs.
         self.internal_result[out_debugname] = _auto_infer.output
         # update the parameter mask of the node
-        self.masks[module_name].update(_auto_infer.weight_mask)
+        print(self.masks.keys())
+        self.masks[module_name] = _auto_infer.weight_mask
 
     def _vnode_to_value(self, c_node):
         """
@@ -332,20 +335,20 @@ class ModelSpeedup:
             for successor in successors:
                 in_degree[successor] -= 1
                 if in_degree[successor] == 0:
-                    visit_queue.put(successor)
+                    visit_queue.put(self.torch_graph.name_to_node[successor])
         # backward mask inference
-        for node in out_degree:
-            if out_degree[node] == 0:
-                visit_queue.put(node)
+        for unique_name in out_degree:
+            if out_degree[unique_name] == 0:
+                visit_queue.put(self.torch_graph.name_to_node[unique_name])
         while not visit_queue.empty():
             curnode = visit_queue.get()
             self.update_mask(curnode)
             predecessors = self.torch_graph.find_predecessors(
                 curnode.unique_name)
             for predecessor in predecessors:
-                out_degree[predecessor.unique_name] -= 1
-                if out_degree[predecessor.unique_name] == 0:
-                    visit_queue.put(predecessor)
+                out_degree[predecessor] -= 1
+                if out_degree[predecessor] == 0:
+                    visit_queue.put(self.torch_graph.name_to_node[predecessor])
 
         # Backwards mask inference
         # for module_name, mask in self.masks.items():
