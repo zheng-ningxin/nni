@@ -10,6 +10,7 @@ from .infer_shape import ModuleMasks, infer_from_mask, infer_from_inshape, infer
 from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
 from .constants import AutoMaskInferenceType
+
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
@@ -391,11 +392,54 @@ class ModelSpeedup:
     #         else:
     #             raise RuntimeError("Unsupported node type: {}".format(g_node.type))
 
+
+    def need_to_unmask(self, node):
+        """
+        Check if this node has shape/sparsity conflict. If not, then
+        return None, if so, return the values that need to be unmasked.
+
+        Parameters
+        ----------
+        node: NodePyGroup
+            The target node to check if need unmask some values.
+        unmask: list
+            List of the values that need to be unmasked. In the list, each element
+            is a tuple which contains the debugName of the tensor and the correponding
+            values that need to be unmask in this tensor. For example, [(1, tensor[0, 1])],
+            in this example, we need unmask the sencond value of the tensor 1.
+        """
+        if node.op_type not in ['aten::add', 'aten::add_', 'aten::cat']:
+            # only abobe operators may invovle shape dependencies
+            return None
+        
+
+    def unmask_chain(self, unmask):
+        pass
+
     def resolve_conflicts(self):
         """
-        resolve the shape/mask conflict.
+        Resolve the shape/mask conflict for the model. Some operators may have shape constraints.
+        For example, `add`, the add operation need the input tensors have exactly the same shape.
+        If the two input tensors of the add opeartor mask difference values/channels, we need to
+        unmask some values/channels and padde zeros to make the shapes of the input tensors are the
+        same.
         """
-        pass
+        # build the out_degree table for the nodes in the model
+        out_degree = {}
+        visit_queue = queue.Queue()
+        for node in self.torch_graph.nodes_py.nodes_op:
+            successors = self.torch_graph.find_successors(node.unique_name)
+            out_degree[node.unique_name] = len(successors)
+            if out_degree[node.unique_name] == 0:
+                # if this node doesn't have any successor nodes
+                visit_queue.put(node)
+        # backward traverse the model graph and find the operators that have shape
+        # dependencies
+        while not visit_queue.empty():
+            cur_node = visit_queue.get()
+            unmask = self.need_to_unmask(cur_node)
+            if unmask is not None:
+                self.unmask_chain(unmask)
 
     def initialize_speedup(self):
         """

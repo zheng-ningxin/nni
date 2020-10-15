@@ -195,31 +195,31 @@ class AutoMaskInferenceZero(AutoMaskInference):
             # so we use clone and detach to create a new tensor with
             # the same values.
             ori_out = self.module(*self.dummy_input).clone().detach()
-            print('Ori output')
-            print(ori_out)
+            # print('Ori output')
+            # print(ori_out)
             # Note: we need randomly init the input one more time here!
             # Because some operation have the in-place operation, such as relu_,
             # the in-place operation may modify or write 0s into the dummy_input
             self.random_init()
             # apply the mask for the input tensor and the weight tensor
             self.apply_mask_zero()
-            print('New output')
+            # print('New output')
             # Same to ori_out, in order to avoid the interference between
             # ori_out and new_out, we just also detach the new_out from the
             # graph
             new_out = self.module(*self.dummy_input).clone().detach()
-            print(new_out)
+            # print(new_out)
             if isinstance(ori_out, torch.Tensor):
                 new_zeors = new_out == 0
                 ori_zeros = ori_out == 0
                 # only mask the newly added zeros
-                print('New zeros')
-                print(new_zeors)
-                print('ori_zeros')
-                print(ori_zeros)
+                # print('New zeros')
+                # print(new_zeors)
+                # print('ori_zeros')
+                # print(ori_zeros)
                 new_zeors[ori_zeros] = False
-                print('Final new zeros')
-                print(new_zeors)
+                # print('Final new zeros')
+                # print(new_zeors)
                 out_mask = torch.ones_like(ori_out)
                 out_mask[new_zeors] = 0
             elif isinstance(ori_out, tuple) or isinstance(ori_out, list):
@@ -234,8 +234,8 @@ class AutoMaskInferenceZero(AutoMaskInference):
             else:
                 _logger.warn(
                     'Only support the OP whose output is tensor/tuple of tensor/list of tensor')
-        print('out_mask')
-        print(out_mask)
+        # print('out_mask')
+        # print(out_mask)
         return out_mask
 
     def update_direct_sparsity(self):
