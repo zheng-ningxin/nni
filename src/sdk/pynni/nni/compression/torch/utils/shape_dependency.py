@@ -8,6 +8,7 @@ __all__ = ['ChannelDependency', 'GroupDependency', 'CatPaddingDependency', 'Inpu
 
 CONV_TYPE = 'aten::_convolution'
 ADD_TYPES = ['aten::add', 'aten::add_']
+MUL_TYPES = ['aten::mul', 'atem::mul_']
 CAT_TYPE = 'aten::cat'
 logger = logging.getLogger('Shape_Dependency')
 RESHAPE_OPS = [CAT_TYPE, 'aten::view', 'aten::reshape', 'aten::flatten', 'aten::mean']

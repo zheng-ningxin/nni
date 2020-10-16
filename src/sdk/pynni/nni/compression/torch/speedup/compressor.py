@@ -10,7 +10,8 @@ from .infer_shape import ModuleMasks, infer_from_mask, infer_from_inshape, infer
 from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
 from .constants import AutoMaskInferenceType
-
+from ..utils.shape_dependency import ADD_TYPES, CAT_TYPE, MUL_TYPES
+from .sparsity_conflicts import sparsity_conflicts
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
@@ -176,6 +177,7 @@ class ModelSpeedup:
         inputs_name = node.inputs
         # build the dummy_input, in_masks the target node
         dummy_input = []
+        debugnames = []
         for _input in inputs_name:
             if _input not in self.internal_result:
                 # if the input debug name is not in self.internal_result,
@@ -192,8 +194,9 @@ class ModelSpeedup:
                 # the scope name of the correponding prim::GetAttr node of `weight` tensor
                 # is None.
                 continue
-            dummy_input.append((self.internal_result[_input].detach(), _input))
-
+            # TODO why detach??
+            dummy_input.append(self.internal_result[_input].detach())
+            debugnames.append(_input)
             # v_node = self.debugname_to_value[_input]
             # if isinstance(v_node.type(), torch._C.TensorType) and \
             #         'prim::GetAttr' not in v_node.node().kind():
@@ -210,7 +213,7 @@ class ModelSpeedup:
             #         # if the input tensor doesn't have masks, then create one
             #         self.masks[_input] = torch.ones(shape).to(self.device)
 
-        return dummy_input
+        return dummy_input, debugnames
 
     def update_mask(self, node):
         """
@@ -237,9 +240,7 @@ class ModelSpeedup:
             return
         # if it is the first visit to this node, then we create a corresponding auto
         # mask inference object for this node
-        inputs = self._prepare_dummy_input(node)
-        input_debugname = [x[1] for x in inputs]
-        dummy_input = [x[0] for x in inputs]
+        dummy_input, input_debugname = self._prepare_dummy_input(node)
         # get the input mask from self.masks
         # Note: the input mask of the successor nodes are
         # already created by the predecessor node
@@ -261,6 +262,8 @@ class ModelSpeedup:
         self.auto_inferences[unique_name] = _auto_infer
         # _auto_infer.update()
         _auto_infer.update_direct_sparsity()
+        # also save the input debug names into the auto_infer
+        _auto_infer.input_debugname = input_debugname
         # update the mask tensor and the internal output of the submodules
         # after manually unpack the tuple/list of tensors, the number of the outputs
         # of each node should always be one
@@ -402,16 +405,24 @@ class ModelSpeedup:
         ----------
         node: NodePyGroup
             The target node to check if need unmask some values.
+        Returns
+        -------
         unmask: list
             List of the values that need to be unmasked. In the list, each element
             is a tuple which contains the debugName of the tensor and the correponding
             values that need to be unmask in this tensor. For example, [(1, tensor[0, 1])],
             in this example, we need unmask the sencond value of the tensor 1.
         """
-        if node.op_type not in ['aten::add', 'aten::add_', 'aten::cat']:
+        if node.op_type not in ADD_TYPES and node.op_type not in MUL_TYPES \
+            and node.op_type != CAT_TYPE:
             # only abobe operators may invovle shape dependencies
             return None
-        
+        unique_name = node.unique_name
+        auto_infer = self.auto_inferences[unique_name]
+        input_masks = auto_infer.in_masks
+        output_mask = auto_infer.output_mask
+        unmask = calc_unmask(node, input_masks, output_mask)
+        return unmask
 
     def unmask_chain(self, unmask):
         pass
