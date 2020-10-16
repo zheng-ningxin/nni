@@ -11,7 +11,7 @@ from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
 from .constants import AutoMaskInferenceType
 from ..utils.shape_dependency import ADD_TYPES, CAT_TYPE, MUL_TYPES
-from .sparsity_conflicts import sparsity_conflicts
+from .sparsity_conflicts import calc_unmask
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
@@ -424,7 +424,20 @@ class ModelSpeedup:
         unmask = calc_unmask(node, input_masks, output_mask)
         return unmask
 
-    def unmask_chain(self, unmask):
+    def unmask_chain(self, debugname, unmask):
+        """
+        Unmask the values in the tensor specified by debugname.
+        This function will also unmask the related dependent values in the
+        predecessor nodes/tensors.
+        Parameters
+        ---------
+        debugname: string
+            The debugname of the target tensor.
+        unmask: torch.Tensor
+            This tensor indicates the values that need to be unmasked in the
+            target tensor. This tensor only contains 0 and 1, 1-> need to be unmasked, 0
+            -> leave it.
+        """
         pass
 
     def resolve_conflicts(self):
@@ -448,9 +461,20 @@ class ModelSpeedup:
         # dependencies
         while not visit_queue.empty():
             cur_node = visit_queue.get()
+            _auto_infer = self.auto_inferences[cur_node.unique_name]
+
             unmask = self.need_to_unmask(cur_node)
-            if unmask is not None:
-                self.unmask_chain(unmask)
+            for i, tensor in enumerate(unmask):
+                if tensor is not None:
+                    # The reason why we use the input_debugname in the _auto_infer
+                    # rather the cur_node.inputs is that the cur_node.inputs have
+                    # the parameters of the modules (weight, bias), and this is caused by
+                    # the merging rules when we build the TorchModuleGraph. In TorchModuleGraph
+                    # we merge the node based on its scope name and the 'prim::GetAttr' node of
+                    # weight tensor has no scope name.
+                    debugname = _auto_infer.input_debugname[i]
+                    self.unmask_chain(debugname, tensor)
+            # if unmask is not None:
 
     def initialize_speedup(self):
         """
