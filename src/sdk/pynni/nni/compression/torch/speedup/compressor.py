@@ -469,19 +469,24 @@ class ModelSpeedup:
         while not visit_queue.empty():
             cur_node = visit_queue.get()
             _auto_infer = self.auto_inferences[cur_node.unique_name]
-
+            _logger.debug('Resolve conflict for %s', cur_node.unique_name)
             unmask = self.need_to_unmask(cur_node)
-            for i, tensor in enumerate(unmask):
-                if tensor is not None:
-                    # The reason why we use the input_debugname in the _auto_infer
-                    # rather the cur_node.inputs is that the cur_node.inputs have
-                    # the parameters of the modules (weight, bias), and this is caused by
-                    # the merging rules when we build the TorchModuleGraph. In TorchModuleGraph
-                    # we merge the node based on its scope name and the 'prim::GetAttr' node of
-                    # weight tensor has no scope name.
-                    debugname = _auto_infer.input_debugname[i]
-                    self.unmask_chain(debugname, tensor)
-            # if unmask is not None:
+            if unmask is not None:
+                for i, tensor in enumerate(unmask):
+                    if tensor is not None:
+                        # The reason why we use the input_debugname in the _auto_infer
+                        # rather the cur_node.inputs is that the cur_node.inputs have
+                        # the parameters of the modules (weight, bias), and this is caused by
+                        # the merging rules when we build the TorchModuleGraph. In TorchModuleGraph
+                        # we merge the node based on its scope name and the 'prim::GetAttr' node of
+                        # weight tensor has no scope name.
+                        debugname = _auto_infer.input_debugname[i]
+                        self.unmask_chain(debugname, tensor)
+            predecessors = self.torch_graph.find_predecessors(cur_node.unique_name)
+            for predecessor in predecessors:
+                out_degree[predecessor] -= 1
+                if out_degree[predecessor] == 0:
+                    visit_queue.put(self.torch_graph.name_to_node[predecessor])
 
     def initialize_speedup(self):
         """
