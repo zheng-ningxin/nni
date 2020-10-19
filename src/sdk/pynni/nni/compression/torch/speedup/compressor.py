@@ -424,7 +424,7 @@ class ModelSpeedup:
         unmask = calc_unmask(node, input_masks, output_mask)
         return unmask
 
-    def unmask_chain(self, debugname, unmask):
+    def unmask_chain(self, debugname, t_unmask):
         """
         Unmask the values in the tensor specified by debugname.
         This function will also unmask the related dependent values in the
@@ -438,7 +438,14 @@ class ModelSpeedup:
             target tensor. This tensor only contains 0 and 1, 1-> need to be unmasked, 0
             -> leave it.
         """
-        pass
+        # find corresponding auto inference object
+        node = self.torch_graph.output_to_node[debugname]
+        unique_name = node.unique_name
+        auto_infer = self.auto_inferences[unique_name]
+        debugnames, unmasks = auto_infer.unmask(t_unmask)
+        for dname, _unmask in zip(debugnames, unmasks):
+            self.unmask_chain(dname, _unmask)
+
 
     def resolve_conflicts(self):
         """
