@@ -298,7 +298,7 @@ class AutoMaskInferenceZero(AutoMaskInference):
 
         print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
 
-    def unmask(self, debugname, t_unmask):
+    def unmask(self, t_unmask):
         """
         Unmask some values to resolve the conflict/interference between the masks.
         Note: the t_unmask indicates the values that should be unmasked in the output
@@ -307,8 +307,6 @@ class AutoMaskInferenceZero(AutoMaskInference):
         values in the output tensor.
         Parameters
         ---------
-        debugname: str
-            The debugname of the output tensor
         t_unmask: torch.Tensor
             This tensor indicates the values that should be unmasked in the output tensor.
         Returns
@@ -359,8 +357,10 @@ class AutoMaskInferenceZero(AutoMaskInference):
                 continue
             gradient = self.dummy_input[i].grad.data
             unmask_pos = torch.isnan(gradient)
-            if torch.sum(unmask_pos) > 0:
-                # if have values that need to be unmasked
+
+            if torch.sum(unmask_pos.to(torch.float32) - self.in_masks[i]>0 ) > 0:
+                # if there is a masked value need to be unmasked, 1 in the unmask_pos
+                # and 0 in self.in_masks[i]
                 self.in_masks[i][unmask_pos] = 1
                 input_debug.append(self.input_debugname[i])
                 input_unmask.append(unmask_pos.to(torch.float32))

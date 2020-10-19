@@ -438,6 +438,12 @@ class ModelSpeedup:
             target tensor. This tensor only contains 0 and 1, 1-> need to be unmasked, 0
             -> leave it.
         """
+        _logger.debug('Unmask the tensor %s ', debugname)
+        if debugname not in self.torch_graph.output_to_node:
+            # already reach the dummy_inputs of the graph
+            unmask_pos = t_unmask > 0
+            self.masks[debugname][unmask_pos] = 1
+            return
         # find corresponding auto inference object
         node = self.torch_graph.output_to_node[debugname]
         unique_name = node.unique_name
