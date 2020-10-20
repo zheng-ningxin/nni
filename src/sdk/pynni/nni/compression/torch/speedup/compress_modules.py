@@ -82,16 +82,16 @@ def replace_linear(linear, auto_infer):
         The new linear module
     """
     assert isinstance(linear, nn.Linear)
-    assert len(auto_infer.in_masks) == 0
-    assert isinstance(auto_infer.output_mask, torch.tensor)
+    assert len(auto_infer.in_masks) == 1
+    assert isinstance(auto_infer.output_mask, torch.Tensor)
     # in_mask = auto_infer.in_masks[0]
     # output_mask = auto_infer.output_mask
     weight_mask = auto_infer.weight_mask['weight']
 
     pruned_in, remained_in = convert_to_coarse_mask(weight_mask, 1)
     pruned_out, remained_out = convert_to_coarse_mask(weight_mask, 0)
-    n_remained_in = weight_mask.size(1) - pruned_in.size()
-    n_remained_out = weight_mask.size(0) - pruned_out.size()
+    n_remained_in = weight_mask.size(1) - pruned_in.size(0)
+    n_remained_out = weight_mask.size(0) - pruned_out.size(0)
     remained_in, remained_out = remained_in.to(
         linear.weight.device), remained_out.to(linear.weight.device)
     _logger.info("replace linear with new in_features: %d, out_features: %d",

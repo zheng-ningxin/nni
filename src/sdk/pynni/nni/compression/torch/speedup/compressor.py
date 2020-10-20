@@ -380,24 +380,25 @@ class ModelSpeedup:
         NOTE: ```func``` type cannot be replaced as it is not a module, thus, one limitation
         is that ```func``` should be not required to be replaced.
         """
-        for unique_name in self.auto_inferences:
-            g_node = self.torch_graph.name_to_node[unique_name]
-            _logger.debug("replace %s, in %s type, with op_type %s",
-                          unique_name, g_node.type, g_node.op_type)
-            auto_infer = self.auto_inferences[unique_name]
-            if g_node.type == 'module':
-                super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
-                m_type = g_node.op_type
-                if not m_type in replace_module:
-                    raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
-                _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
-                compressed_module = replace_module[m_type](leaf_module, auto_infer)
-                setattr(super_module, g_node.name.split('.')[-1], compressed_module)
-            elif g_node.type == 'func':
-                _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
-                             module_name, g_node.op_type)
-            else:
-                raise RuntimeError("Unsupported node type: {}".format(g_node.type))
+        with torch.no_grad():
+            for unique_name in self.auto_inferences:
+                g_node = self.torch_graph.name_to_node[unique_name]
+                _logger.debug("replace %s, in %s type, with op_type %s",
+                            unique_name, g_node.type, g_node.op_type)
+                auto_infer = self.auto_inferences[unique_name]
+                if g_node.type == 'module':
+                    super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
+                    m_type = g_node.op_type
+                    if not m_type in replace_module:
+                        raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
+                    _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
+                    compressed_module = replace_module[m_type](leaf_module, auto_infer)
+                    setattr(super_module, g_node.name.split('.')[-1], compressed_module)
+                elif g_node.type == 'func':
+                    _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
+                                unique_name, g_node.op_type)
+                else:
+                    raise RuntimeError("Unsupported node type: {}".format(g_node.type))
 
 
     def need_to_unmask(self, node):
