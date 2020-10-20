@@ -46,8 +46,9 @@ def convert_to_coarse_mask(t_mask, dim):
     n_dims = len(shape)
     dim_list = list(range(n_dims))
     # try to reduce the mask from the 0-th dimension
-    tmp_dim_list = dim_list.remove(dim)
-    t_merged = torch.sum(t_mask, tmp_dim_list)
+    dim_list.remove(dim)
+
+    t_merged = torch.sum(t_mask, dim_list)
     assert t_merged.size(0) == shape[dim]
     all_pruned = t_merged == 0
     need_remain = t_merged != 0
@@ -238,6 +239,7 @@ def replace_conv2d(conv, auto_infer):
 
     new_conv.to(conv.weight.device)
     new_conv.weight.copy_(tmp_weight)
+    # copy the bias data
     if conv.bias is not None:
         new_conv.bias.data.copy_(torch.index_select(
             conv.bias.data, 0, remained_out))

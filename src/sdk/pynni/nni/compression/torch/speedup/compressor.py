@@ -4,6 +4,7 @@
 import queue
 import logging
 import torch
+import copy
 from nni.compression.torch.utils.mask_conflict import fix_mask_conflict
 from .compress_modules import replace_module
 from .infer_shape import ModuleMasks, infer_from_mask, infer_from_inshape, infer_from_outshape
@@ -58,7 +59,9 @@ class ModelSpeedup:
             the device on which masks are placed, same to map_location in ```torch.load```
         """
         from nni._graph_utils import build_module_graph
-
+        # The auto inference will change the values of the parameters in the model
+        # so we need make a copy before the mask inference
+        self.ori_state_dict = copy.deepcopy(model.state_dict())
         self.bound_model = model
         self.inferred_masks = dict()  # key: module_name, value: ModuleMasks
         self.dummy_input = dummy_input
@@ -526,6 +529,9 @@ class ModelSpeedup:
         self.infer_modules_masks()
         _logger.info('resolve the mask conflict')
         self.resolve_conflicts()
+        # TODO self.resolve_group_conflict()
+        # load the original stat dict before replace the model
+        self.bound_model.load_state_dict(self.ori_state_dict)
         _logger.info("replace compressed modules...")
         self.replace_compressed_modules()
         self.bound_model.train(training)
