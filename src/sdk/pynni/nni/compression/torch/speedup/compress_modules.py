@@ -172,17 +172,21 @@ def replace_conv2d(conv, auto_infer):
     assert isinstance(conv, nn.Conv2d)
     # the conv layer should only have one input tensor
     assert len(auto_infer.in_masks) == 1
-    assert isinstance
     in_mask = auto_infer.in_masks[0]
     output_mask = auto_infer.output_mask
     weight_mask = auto_infer.weight_mask['weight']
     pruned_in, remained_in = convert_to_coarse_mask(in_mask, 1)
     pruned_out, remained_out = convert_to_coarse_mask(output_mask, 1)
-    if pruned_in.size(0) == 0 and pruned_out.size(0):
+    print('%%%%%%%%%%%%%%%%%')
+    print(remained_out)
+
+    if pruned_in.size(0) == 0 and pruned_out.size(0)==0:
         # if this is not structurally pruned at all
         return conv
     n_remained_in = weight_mask.size(1) - pruned_in.size(0)
     n_remained_out = weight_mask.size(0) - pruned_out.size(0)
+    print(n_remained_out)
+
     assert n_remained_in == remained_in.size(0)
     assert n_remained_out == remained_out.size(0)
     k_size1, k_size2 = conv.kernel_size
