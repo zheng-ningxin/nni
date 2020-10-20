@@ -178,10 +178,13 @@ def replace_conv2d(conv, auto_infer):
     weight_mask = auto_infer.weight_mask['weight']
     pruned_in, remained_in = convert_to_coarse_mask(in_mask, 1)
     pruned_out, remained_out = convert_to_coarse_mask(output_mask, 1)
-    n_remained_in = weight_mask.size(1) - pruned_in.size()
-    n_remained_out = weight_mask.size(0) - pruned_out.size()
-    assert n_remained_in == remained_in.size()
-    assert n_remained_out == remained_out.size()
+    if pruned_in.size(0) == 0 and pruned_out.size(0):
+        # if this is not structurally pruned at all
+        return conv
+    n_remained_in = weight_mask.size(1) - pruned_in.size(0)
+    n_remained_out = weight_mask.size(0) - pruned_out.size(0)
+    assert n_remained_in == remained_in.size(0)
+    assert n_remained_out == remained_out.size(0)
     k_size1, k_size2 = conv.kernel_size
     tmp_weight = torch.ones(n_remained_out, n_remained_in, k_size1, k_size2)
     tmp_weight = tmp_weight.to(conv.weight.device)
@@ -222,7 +225,7 @@ def replace_conv2d(conv, auto_infer):
         new_out_start = new_outchannel_step * new_groups
         new_out_end = new_out_start + new_outchannel_step
         tmp_weight[new_out_start:new_out_end] = torch.index_select(
-            conv.weight[current_output_index], 1, current_input_index)
+            conv.weight[current_output_index], 1, torch.tensor(current_input_index).to(conv.weight.device))
         new_groups += 1
 
     _logger.debug("replace conv2d with in_channels: %d, out_channels: %d",
