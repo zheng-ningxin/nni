@@ -368,32 +368,33 @@ class ModelSpeedup:
         #         continue
         #     self.infer_module_mask(module_name, None, mask=mask)
 
-    # def replace_compressed_modules(self):
-    #     """
-    #     Replace all the modules that have changed (weights/inputs/output) shape.
-    #     The new module is created using the same arguments of the to-be-replaced module,
-    #     and correctly inherits its weights.
+    def replace_compressed_modules(self):
+        """
+        Replace all the modules that have changed (weights/inputs/output) shape.
+        The new module is created using the same arguments of the to-be-replaced module,
+        and correctly inherits its weights.
 
-    #     NOTE: ```func``` type cannot be replaced as it is not a module, thus, one limitation
-    #     is that ```func``` should be not required to be replaced.
-    #     """
-    #     for module_name in self.inferred_masks:
-    #         g_node = self.torch_graph.name_to_node[module_name]
-    #         _logger.debug("replace %s, in %s type, with op_type %s",
-    #                       module_name, g_node.type, g_node.op_type)
-    #         if g_node.type == 'module':
-    #             super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
-    #             m_type = g_node.op_type
-    #             if not m_type in replace_module:
-    #                 raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
-    #             _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
-    #             compressed_module = replace_module[m_type](leaf_module, self.inferred_masks[module_name])
-    #             setattr(super_module, g_node.name.split('.')[-1], compressed_module)
-    #         elif g_node.type == 'func':
-    #             _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
-    #                          module_name, g_node.op_type)
-    #         else:
-    #             raise RuntimeError("Unsupported node type: {}".format(g_node.type))
+        NOTE: ```func``` type cannot be replaced as it is not a module, thus, one limitation
+        is that ```func``` should be not required to be replaced.
+        """
+        for unique_name in self.auto_inferences:
+            g_node = self.torch_graph.name_to_node[unique_name]
+            _logger.debug("replace %s, in %s type, with op_type %s",
+                          unique_name, g_node.type, g_node.op_type)
+            auto_infer = self.auto_inferences[unique_name]
+            if g_node.type == 'module':
+                super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
+                m_type = g_node.op_type
+                if not m_type in replace_module:
+                    raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
+                _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
+                compressed_module = replace_module[m_type](leaf_module, auto_infer)
+                setattr(super_module, g_node.name.split('.')[-1], compressed_module)
+            elif g_node.type == 'func':
+                _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
+                             module_name, g_node.op_type)
+            else:
+                raise RuntimeError("Unsupported node type: {}".format(g_node.type))
 
 
     def need_to_unmask(self, node):
@@ -526,6 +527,6 @@ class ModelSpeedup:
         _logger.info('resolve the mask conflict')
         self.resolve_conflicts()
         _logger.info("replace compressed modules...")
-        # self.replace_compressed_modules()
+        self.replace_compressed_modules()
         self.bound_model.train(training)
         _logger.info("speedup done")
