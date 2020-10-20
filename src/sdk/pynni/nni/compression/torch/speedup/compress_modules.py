@@ -80,6 +80,7 @@ def replace_linear(linear, auto_infer):
     torch.nn.Linear
         The new linear module
     """
+    assert isinstance(linear, nn.Linear)
     assert len(auto_infer.in_masks) == 0
     assert isinstance(auto_infer.output_mask, torch.tensor)
     # in_mask = auto_infer.in_masks[0]
@@ -106,7 +107,8 @@ def replace_linear(linear, auto_infer):
             tmp_weight_data, 1, remained_in)
 
         if linear.bias is not None:
-            new_linear.bias.data = torch.index_select(linear.bias.data, 0, remained_out)
+            new_linear.bias.data = torch.index_select(
+                linear.bias.data, 0, remained_out)
     return new_linear
 
 
@@ -151,85 +153,93 @@ def replace_batchnorm2d(norm, auto_infer):
     return new_norm
 
 
-def replace_conv2d(conv, mask):
+def replace_conv2d(conv, auto_infer):
     """
     Parameters
     ----------
     conv : torch.nn.Conv2d
         The conv2d module to be replaced
-    mask : ModuleMasks
-        The masks of this module
+    auto_infer : AutoMaskInference
+        The auto mask inference object that contains the mask of the input
+        tensor, output tensor and parameters
 
     Returns
     -------
     torch.nn.Conv2d
         The new conv2d module
     """
-    assert isinstance(mask, ModuleMasks)
-    if mask.input_mask is None:
-        in_channels = conv.in_channels
-    else:
-        in_channels_index = mask.input_mask.mask_index[1]
-        in_channels = in_channels_index.size()[0]
-    if mask.output_mask is None:
-        out_channels = conv.out_channels
-    else:
-        out_channels_index = mask.output_mask.mask_index[1]
-        out_channels = out_channels_index.size()[0]
+    assert isinstance(conv, nn.Conv2d)
+    # the conv layer should only have one input tensor
+    assert len(auto_infer.in_masks) == 1
+    assert isinstance
+    in_mask = auto_infer.in_masks[0]
+    output_mask = auto_infer.output_mask
+    weight_mask = auto_infer.weight_mask['weight']
+    pruned_in, remained_in = convert_to_coarse_mask(in_mask, 1)
+    pruned_out, remained_out = convert_to_coarse_mask(output_mask, 1)
+    n_remained_in = weight_mask.size(1) - pruned_in.size()
+    n_remained_out = weight_mask.size(0) - pruned_out.size()
+    assert n_remained_in == remained_in.size()
+    assert n_remained_out == remained_out.size()
+    k_size1, k_size2 = conv.kernel_size
+    tmp_weight = torch.ones(n_remained_out, n_remained_in, k_size1, k_size2)
+    tmp_weight = tmp_weight.to(conv.weight.device)
+    # Note: We should resolve the group dependency of the conv layers before
+    # run into here.
+    # check if the mask tensor meets the group dependency and calculate the
+    # new number of the groups after pruning
+    # the original step size of the input channel for each group
+    ori_inchannel_step = int(conv.in_channels/conv.groups)
+    # the original step size of the output channel for each group
+    ori_outchannel_step = int(conv.out_channels/conv.groups)
+    new_inchannel_step = new_outchannel_step = None
+    new_groups = 0
+    for groupid in range(conv.groups):
+        in_start = groupid * ori_inchannel_step
+        in_end = in_start + ori_inchannel_step
+        out_start = groupid * ori_outchannel_step
+        out_end = out_start + ori_outchannel_step
+        current_input_index = list(
+            filter(lambda x: in_start <= x and x < in_end, remained_in.tolist()))
+        current_output_index = list(
+            filter(lambda x: out_start <= x and x < out_end, remained_out.tolist()))
+        # remap the global index to the group index
+        current_input_index = [x-in_start for x in current_input_index]
+        if len(current_input_index) == 0:
+            # if the whole group are pruned
+            assert len(current_output_index) == 0
+            continue
+        # check if the number of remained channel of each group are the same
+        if new_inchannel_step:
+            assert len(current_input_index) == new_inchannel_step
+            assert len(current_output_index) == new_outchannel_step
+        else:
+            # update the number of remained channels after pruning
+            new_inchannel_step = len(current_input_index)
+            new_outchannel_step = len(current_output_index)
+        # copy the weight into tmp_weight
+        new_out_start = new_outchannel_step * new_groups
+        new_out_end = new_out_start + new_outchannel_step
+        tmp_weight[new_out_start:new_out_end] = torch.index_select(
+            conv.weight[current_output_index], 1, current_input_index)
+        new_groups += 1
 
     _logger.debug("replace conv2d with in_channels: %d, out_channels: %d",
-                  in_channels, out_channels)
-    new_conv = torch.nn.Conv2d(in_channels=in_channels,
-                               out_channels=out_channels,
+                  n_remained_in, n_remained_out)
+    new_conv = torch.nn.Conv2d(in_channels=n_remained_in,
+                               out_channels=n_remained_out,
                                kernel_size=conv.kernel_size,
                                stride=conv.stride,
                                padding=conv.padding,
                                dilation=conv.dilation,
-                               groups=conv.groups,
+                               groups=new_groups,
                                bias=conv.bias is not None,
                                padding_mode=conv.padding_mode)
 
     new_conv.to(conv.weight.device)
-    tmp_weight_data = tmp_bias_data = None
-
-    if mask.output_mask is not None:
-        tmp_weight_data = torch.index_select(
-            conv.weight.data, 0, out_channels_index)
-        if conv.bias is not None:
-            tmp_bias_data = torch.index_select(
-                conv.bias.data, 0, out_channels_index)
-    else:
-        tmp_weight_data = conv.weight.data
-    # For the convolutional layers that have more than one group
-    # we need to copy the weight group by group, because the input
-    # channal is also divided into serveral groups and each group
-    # filter may have different input channel indexes.
-    input_step = int(conv.in_channels / conv.groups)
-    in_channels_group = int(in_channels / conv.groups)
-    filter_step = int(out_channels / conv.groups)
-    if mask.input_mask is not None:
-        for groupid in range(conv.groups):
-            start = groupid * input_step
-            end = (groupid + 1) * input_step
-            current_input_index = list(
-                filter(lambda x: start <= x and x < end, in_channels_index.tolist()))
-            # shift the global index into the group index
-            current_input_index = [x-start for x in current_input_index]
-            # if the groups is larger than 1, the input channels of each
-            # group should be pruned evenly.
-            assert len(current_input_index) == in_channels_group, \
-                'Input channels of each group are not pruned evenly'
-            current_input_index = torch.tensor(current_input_index).to(
-                tmp_weight_data.device)  # pylint: disable=not-callable
-            f_start = groupid * filter_step
-            f_end = (groupid + 1) * filter_step
-            new_conv.weight.data[f_start:f_end] = torch.index_select(
-                tmp_weight_data[f_start:f_end], 1, current_input_index)
-    else:
-        new_conv.weight.data.copy_(tmp_weight_data)
-
+    new_conv.weight.copy_(tmp_weight)
     if conv.bias is not None:
-        new_conv.bias.data.copy_(
-            conv.bias.data if tmp_bias_data is None else tmp_bias_data)
+        new_conv.bias.data.copy_(torch.index_select(
+            conv.bias.data, 0, remained_out))
 
     return new_conv
