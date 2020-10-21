@@ -246,6 +246,8 @@ infer_from_inshape = {
     'aten::relu_': lambda module_masks, mask: relu_inshape(module_masks, mask),
     'aten::sigmoid': lambda module_masks, mask: relu_inshape(module_masks, mask),
     'Conv2d': lambda module_masks, mask: conv2d_inshape(module_masks, mask),
+    # ConvTranspose2d basically has the same characteristic in the model compression 
+    'ConvTranspose2d': lambda module_masks, mask: conv2d_inshape(module_masks, mask),
     'MaxPool2d': lambda module_masks, mask: maxpool2d_inshape(module_masks, mask),
     'aten::max_pool2d': lambda module_masks, mask: maxpool2d_inshape(module_masks, mask),
     'aten::avg_pool2d': lambda module_masks, mask: maxpool2d_inshape(module_masks, mask),
@@ -277,6 +279,8 @@ Infer input and weight shape of a module/function from its output shape
 """
 infer_from_outshape = {
     'Conv2d': lambda module_masks, mask: conv2d_outshape(module_masks, mask),
+    'ConvTranspose2d': lambda module_masks, mask: conv2d_outshape(module_masks, mask),
+
     'BatchNorm2d': lambda module_masks, mask: batchnorm2d_outshape(module_masks, mask),
 
     'MaxPool2d': lambda module_masks, mask: maxpool2d_outshape(module_masks, mask),

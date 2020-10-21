@@ -10,6 +10,7 @@ _logger = logging.getLogger(__name__)
 replace_module = {
     'BatchNorm2d': lambda module, mask: replace_batchnorm2d(module, mask),
     'Conv2d': lambda module, mask: replace_conv2d(module, mask),
+    'ConvTranspose2d': lambda module, mask: replace_conv2d(module, mask),
     'MaxPool2d': lambda module, mask: no_replace(module, mask),
     'AvgPool2d': lambda module, mask: no_replace(module, mask),
     'AdaptiveAvgPool2d': lambda module, mask: no_replace(module, mask),
