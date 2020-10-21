@@ -316,23 +316,23 @@ class AutoMaskInferenceZero(AutoMaskInference):
         """
         # Enable the gradient
         self.requires_grad_()
-        self.zero_grad()
         self.random_init()
+        self.apply_mask_zero()
+        self.zero_grad()
+
         # in case there is in_place operation in this node
         tmp_dummy_input = [x.clone() if isinstance(
             x, torch.Tensor) else x for x in self.dummy_input]
         output = self.module(*tmp_dummy_input)
         # backwards to get the gradient
         if isinstance(t_unmask, torch.Tensor):
-            gradient_nan = torch.ones_like(output)
-            # find all the positions that need to be unmasked
             unmask_pos = t_unmask > 0
             print('Unmask position')
             print(unmask_pos)
             print('Output mask before unmask')
             print(self.output_mask)
-            gradient_nan[unmask_pos] = float('nan')
-            output.backward(gradient_nan)
+            # use the unmask tensor as the gradient
+            output.backward(t_unmask)
             # update the output mask
             self.output_mask[unmask_pos] = 1
         elif isinstance(t_unmask, list) or isinstance(t_unmask, tuple):
@@ -341,17 +341,16 @@ class AutoMaskInferenceZero(AutoMaskInference):
             assert len(output) == len(t_unmask)
             for i, _ in enumerate(t_unmask):
                 _unmask = t_unmask[i]
+                unmask_pos = _unmask > 0
                 _output = output[i]
-                gradient_nan = torch.ones_like(_output)
-                unmask_pos = _output > 0
-                gradient_nan[unmask_pos] = float('nan')
-                _output.backward(gradient_nan)
+                _output.backward(_unmask)
                 self.output_mask[i][unmask_pos] = 1
-        # all the values whose gradient is Nan should be unmasked
+        # all the values whose gradient is larger that zero
+        # should be unmasked unmasked
         # unmask the values in the parameters
         for para_name in self.weights:
             gradient = self.weights[para_name].grad.data
-            unmask_pos = torch.isnan(gradient)
+            unmask_pos = gradient > 0
             self.weight_mask[para_name][unmask_pos] = 1
         # check if there are values in the input tensors that should be unmasked
         input_debug = []
@@ -360,9 +359,9 @@ class AutoMaskInferenceZero(AutoMaskInference):
             if not isinstance(self.dummy_input[i], torch.Tensor):
                 continue
             gradient = self.dummy_input[i].grad.data
-            unmask_pos = torch.isnan(gradient)
+            unmask_pos = gradient > 0
 
-            if torch.sum(unmask_pos.to(torch.float32) - self.in_masks[i]>0 ) > 0:
+            if torch.sum((unmask_pos.to(torch.float32) - self.in_masks[i]) > 0) > 0:
                 # if there is a masked value need to be unmasked, 1 in the unmask_pos
                 # and 0 in self.in_masks[i]
                 self.in_masks[i][unmask_pos] = 1
@@ -621,7 +620,7 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
                     'Only support the OP whose output is tensor/list of tensors')
 
         return out_mask
-    
+
     def unmask(self, t_unmask):
         """
         Unmask some values to resolve the conflict/interference between the masks.
@@ -682,7 +681,7 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
             gradient = self.dummy_input[i].grad.data
             unmask_pos = torch.isnan(gradient)
 
-            if torch.sum(unmask_pos.to(torch.float32) - self.in_masks[i]>0 ) > 0:
+            if torch.sum(unmask_pos.to(torch.float32) - self.in_masks[i] > 0) > 0:
                 # if there is a masked value need to be unmasked, 1 in the unmask_pos
                 # and 0 in self.in_masks[i]
                 self.in_masks[i][unmask_pos] = 1

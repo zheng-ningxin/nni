@@ -451,13 +451,17 @@ class ModelSpeedup:
         # find corresponding auto inference object
         node = self.torch_graph.output_to_node[debugname]
         unique_name = node.unique_name
-        _logger.debug('Unmask the tensor %s of %s', debugname, unique_name)
+        # _logger.debug('Unmask the tensor %s of %s', debugname, unique_name)
 
         auto_infer = self.auto_inferences[unique_name]
         debugnames, unmasks = auto_infer.unmask(t_unmask)
-        print("unmask input of ", unique_name)
+        print("UNmasking  ", unique_name)
+        print('Input unmask tensor')
         print(t_unmask)
         print('NEW tensors that need to be unmasked')
+        print(debugnames)
+        print(unmasks)
+        print('!!!!!!!!')
         for dname, _unmask in zip(debugnames, unmasks):
             print(dname, _unmask)
             self.unmask_chain(dname, _unmask)
