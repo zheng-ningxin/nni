@@ -637,6 +637,7 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
         input_unmask: list
             The values in the input tensors that should be unmasked
         """
+        _logger.info('In auto inference remove unmask')
         # Enable the gradient
         self.requires_grad_()
         self.zero_grad()
@@ -680,7 +681,11 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
                 continue
             gradient = self.dummy_input[i].grad.data
             unmask_pos = torch.isnan(gradient)
-
+            print('Input tensor-',i )
+            print('Gradient of input tensor')
+            print(gradient)
+            print('Unmask pos')
+            print(unmask_pos)
             if torch.sum(unmask_pos.to(torch.float32) - self.in_masks[i] > 0) > 0:
                 # if there is a masked value need to be unmasked, 1 in the unmask_pos
                 # and 0 in self.in_masks[i]

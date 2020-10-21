@@ -228,8 +228,12 @@ class ModelSpeedup:
             errmsg = 'The auto inference type of %s is not specified! Please specify the \
                 auto mask inference type in constants.py!' % str(node.op_type)
             raise Exception(errmsg)
-        AutoMaskInferenceClass = AutoMaskInferenceType[node.op_type]
 
+        AutoMaskInferenceClass = AutoMaskInferenceType[node.op_type]
+        print("Creating auto inference for")
+        print(node.unique_name)
+        print(node.op_type)
+        print(AutoMaskInferenceClass)
         # this name is consistent with the name returned by named_modules()
         module_name = node.name
         _logger.info('Update mask for %s', module_name)
@@ -456,6 +460,7 @@ class ModelSpeedup:
         auto_infer = self.auto_inferences[unique_name]
         debugnames, unmasks = auto_infer.unmask(t_unmask)
         print("UNmasking  ", unique_name)
+        print(type(auto_infer))
         print('Input unmask tensor')
         print(t_unmask)
         print('NEW tensors that need to be unmasked')
