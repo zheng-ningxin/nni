@@ -179,6 +179,8 @@ def replace_conv2d(conv, auto_infer):
     pruned_out, remained_out = convert_to_coarse_mask(output_mask, 1)
     print('%%%%%%%%%%%%%%%%%')
     print(remained_out)
+    print('Output mask')
+    print(output_mask)
 
     if pruned_in.size(0) == 0 and pruned_out.size(0)==0:
         # if this is not structurally pruned at all

@@ -1,7 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 import torch
+import logging
 
+_logger = logging.getLogger(__name__)
+_logger.setLevel(logging.INFO)
 
 def cat_conflict(node, input_masks, output_masks):
     # TODO does cat need to resolve the mask conflict?
@@ -28,6 +31,7 @@ def add_conflict(node, input_masks, output_mask):
         mask doesn't need to unmask any value, else we should unmask the values in the
         tensor.
     """
+    
     # in the add operation, we should align the input mask
     # with the output mask.
     assert isinstance(input_masks, list)

@@ -443,7 +443,6 @@ class ModelSpeedup:
             target tensor. This tensor only contains 0 and 1, 1-> need to be unmasked, 0
             -> leave it.
         """
-        _logger.debug('Unmask the tensor %s ', debugname)
         if debugname not in self.torch_graph.output_to_node:
             # already reach the dummy_inputs of the graph
             unmask_pos = t_unmask > 0
@@ -452,9 +451,15 @@ class ModelSpeedup:
         # find corresponding auto inference object
         node = self.torch_graph.output_to_node[debugname]
         unique_name = node.unique_name
+        _logger.debug('Unmask the tensor %s of %s', debugname, unique_name)
+
         auto_infer = self.auto_inferences[unique_name]
         debugnames, unmasks = auto_infer.unmask(t_unmask)
+        print("unmask input of ", unique_name)
+        print(t_unmask)
+        print('NEW tensors that need to be unmasked')
         for dname, _unmask in zip(debugnames, unmasks):
+            print(dname, _unmask)
             self.unmask_chain(dname, _unmask)
 
 
@@ -492,6 +497,8 @@ class ModelSpeedup:
                         # we merge the node based on its scope name and the 'prim::GetAttr' node of
                         # weight tensor has no scope name.
                         debugname = _auto_infer.input_debugname[i]
+                        print('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
+                        print('Find conflict at ', cur_node.name)
                         self.unmask_chain(debugname, tensor)
             predecessors = self.torch_graph.find_predecessors(cur_node.unique_name)
             for predecessor in predecessors:
