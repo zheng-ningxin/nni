@@ -1022,17 +1022,27 @@ def convtranspose2d_mask(module_masks, mask):
         module_masks.set_param_masks('weight', weight_cmask)
         if prune_dim == 1:
             module_masks.set_param_masks('bias', bias_cmask)
-    io_cmask = CoarseMask(num_dim=4)
-    io_cmask.add_index_mask(dim=1, index=index)
-
+    
     if prune_dim == 1:
         # filter pruning, prune the output channel
+        # NOTE: the group in ConvTranspose2d is different
+        # from the traditional conv layers
+        n_groups = module_masks.module.groups
+        # repeat the io_cmask n_group times
+        io_cmask = CoarseMask(num_dim=4)
+        index_list = []
+        for groupid in range(0, n_groups):
+            index_list.append(index + groupid * weight_mask.size(1))
+        out_index = torch.cat(index_list, dim=0)
+        io_cmask.add_index_mask(dim=1, index=out_index)
         if module_masks.output_mask is None:
             module_masks.set_output_mask(io_cmask)
         else:
             assert module_masks.output_mask == io_cmask
         return None, module_masks.output_mask
     else:
+        io_cmask = CoarseMask(num_dim=4)
+        io_cmask.add_index_mask(dim=1, index=index)
         # input channel pruning
         if module_masks.input_mask is None:
             module_masks.set_input_mask(io_cmask)
@@ -1113,6 +1123,59 @@ def conv2d_outshape(module_masks, mask):
 
     # shape changes pass through depths wise conv layers
     m = module_masks.module
+    if m.in_channels == m.out_channels == m.groups:
+        module_masks.output_mask = mask
+        module_masks.input_mask = mask
+        return mask
+    return None
+
+def convtranspose2d_outshape(module_masks, mask):
+    """
+    Assume only the second dimension is masked
+
+    Parameters
+    ----------
+    module_masks : ModuleMasks
+        The ModuleMasks instance of the conv2d
+    mask : CoarseMask
+        The mask of its output tensor
+
+    Returns
+    -------
+    CoarseMask
+        The mask of its input tensor
+    """
+    assert isinstance(mask, CoarseMask)
+    assert mask.mask_index[1] is not None
+    assert mask.mask_index[0] is None
+    assert mask.mask_index[2] is None
+    assert mask.mask_index[3] is None
+    # Special check for the convtranspose2d
+    # the index of each group should be exactly the same
+    m = module_masks.module
+    assert mask.mask_index[1].size(0) % m.groups == 0
+    # int_mask is the index inside the group
+    _int_mask = mask.mask_index[1].to(torch.int32) % m.weight.size(1)
+    assert len(set(_int_mask.tolist())) == _int_mask.size(0)/m.groups
+
+    if module_masks.output_mask is None:
+        module_masks.output_mask = mask
+    else:
+        # mask conflict should be solved by fix_mask_conflict before speedup
+        # mask and module_masks.output_mask may have different number of dimensions
+        # since they could be passed by linear or conv2d
+        assert all(
+            module_masks.output_mask.mask_index[1] == mask.mask_index[1])
+
+    weight_cmask = CoarseMask(num_dim=4)
+    weight_cmask.add_index_mask(dim=1, index=mask.mask_index[1])
+    bias_cmask = CoarseMask(num_dim=1)
+    bias_cmask.add_index_mask(dim=0, index=mask.mask_index[1])
+    module_masks.set_param_masks('weight', weight_cmask)
+    module_masks.set_param_masks('bias', bias_cmask)
+
+    # shape changes pass through depths wise conv layers
+
     if m.in_channels == m.out_channels == m.groups:
         module_masks.output_mask = mask
         module_masks.input_mask = mask
