@@ -602,11 +602,33 @@ class AutoMaskInferenceRemove(AutoMaskInferenceZero):
         self.apply_mask_nan()
         out_mask = None
         with torch.no_grad():
+            print('input size')
+            print(self.dummy_input[0].size())
+            print('nan in input value')
+            print(torch.sum(torch.isnan(self.dummy_input[0])))
+            print('Module')
+            print(self.module)
+            # print('Output tensor')
             new_out = self.module(*self.dummy_input)
+            nan_in = torch.isnan(self.dummy_input[0])
+            nan_out = torch.isnan(new_out)
+            nan_diff = nan_in.to(torch.int16)-nan_out.to(torch.int16)
+            print('Output nan diff')
+            print(new_out[nan_diff>0])
+            print('input values')
+            print(self.dummy_input[0][nan_diff>0])
+
+
             if isinstance(new_out, torch.Tensor):
                 nan_pos = torch.isnan(new_out)
+                print('output nan count')
+                print(torch.sum(nan_pos))
                 out_mask = torch.ones_like(new_out)
                 out_mask[nan_pos] = 0
+                print('sum of the input mask')
+                print(torch.sum(self.in_masks[0]))
+                print('sum of output mask')
+                print(torch.sum(out_mask))
             elif isinstance(new_out, list) or isinstance(new_out, tuple):
                 out_mask = []
                 for t_out in new_out:

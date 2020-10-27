@@ -47,6 +47,42 @@ def fix_mask_conflict(masks, model=None, dummy_input=None, traced=None):
     masks = padding_cat_mask.fix_mask()
     return masks
 
+
+def fix_group_conflict(masks, model=None, dummy_input=None, traced=None):
+    """
+    MaskConflict fix the mask conflict for the channel dependencies
+    and group dependency.
+
+    Parameters
+    ----------
+    masks : dict/str
+        A dict object that stores the masks or the path of the mask file
+    model : torch.nn.Module
+        model to fix the mask conflict
+    dummy_input : torch.Tensor
+        input example to trace the model
+    traced : torch._C.torch.jit.TopLevelTracedModule
+        the traced model of the target model, is this parameter is not None,
+        we donnot use the model and dummpy_input to get the trace graph.
+    """
+    if isinstance(masks, str):
+        # if the input is the path of the mask_file
+        assert os.path.exists(masks)
+        masks = torch.load(masks)
+    # if the user uses the model and dummy_input to trace the model, we
+    # should get the traced model handly, so that, we only trace the
+    # model once, GroupMaskConflict and ChannelMaskConflict will reuse
+    # this traced model.
+    if traced is None:
+        assert model is not None and dummy_input is not None
+        with torch.onnx.set_training(model, False):
+            # We need to trace the model in this way, else it will have problems
+            traced = torch.jit.trace(model, dummy_input)
+
+    fix_group_mask = GroupMaskConflict(masks, model, dummy_input, traced)
+    masks = fix_group_mask.fix_mask()
+    return masks    
+
 class MaskFix:
     def __init__(self, masks, model=None, dummy_input=None, traced=None):
         # check if the parameters are valid

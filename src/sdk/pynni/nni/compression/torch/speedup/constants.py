@@ -10,13 +10,18 @@ AutoMaskInferenceType={
     'aten::relu_': AutoMaskInferenceRemove,
     'aten::relu': AutoMaskInferenceRemove,
     'ReLU': AutoMaskInferenceRemove,
+    'ReLU6': AutoMaskInferenceRemove,
+
 
     'Conv2d': AutoMaskInferenceZero,
     'Linear': AutoMaskInferenceZero,
 
     'aten::flatten': AutoMaskInferenceZero,
+    'aten::mean': AutoMaskInferenceZero,
     'MaxPool2d': AutoMaskInferenceZero,
     'AdaptiveAvgPool2d': AutoMaskInferenceZero,
     'Dropout': AutoMaskInferenceRemove,
+    # 'aten::dropout': AutoMaskInferenceRemove,
+
     'BatchNorm2d': AutoMaskInferenceRemove
 }

@@ -5,7 +5,7 @@ import queue
 import logging
 import torch
 import copy
-from nni.compression.torch.utils.mask_conflict import fix_mask_conflict
+from nni.compression.torch.utils.mask_conflict import fix_mask_conflict, fix_group_conflict
 from .compress_modules import replace_module
 from .infer_shape import ModuleMasks, infer_from_mask, infer_from_inshape, infer_from_outshape
 from .infer_mask import AutoMaskInference
@@ -459,20 +459,27 @@ class ModelSpeedup:
 
         auto_infer = self.auto_inferences[unique_name]
         debugnames, unmasks = auto_infer.unmask(t_unmask)
-        print("UNmasking  ", unique_name)
-        print(type(auto_infer))
-        print('Input unmask tensor')
-        print(t_unmask)
-        print('NEW tensors that need to be unmasked')
-        print(debugnames)
-        print(unmasks)
-        print('!!!!!!!!')
+        # print("UNmasking  ", unique_name)
+        # print(type(auto_infer))
+        # print('Input unmask tensor')
+        # print(t_unmask)
+        # print('NEW tensors that need to be unmasked')
+        # print(debugnames)
+        # print(unmasks)
+        # print('!!!!!!!!')
         for dname, _unmask in zip(debugnames, unmasks):
             print(dname, _unmask)
             self.unmask_chain(dname, _unmask)
 
 
     def resolve_conflicts(self):
+        """
+        Resolve the channel and
+        """
+        self.resolve_channel_conflicts()
+        # self.resolve_group_conflict()
+
+    def resolve_channel_conflicts(self):
         """
         Resolve the shape/mask conflict for the model. Some operators may have shape constraints.
         For example, `add`, the add operation need the input tensors have exactly the same shape.
@@ -542,6 +549,7 @@ class ModelSpeedup:
         _logger.info("start to speed up the model")
         self.initialize_speedup()
         training = self.bound_model.training
+        fix_group_conflict(self.masks, self.bound_model, self.dummy_input)
         _logger.info("infer module masks...")
         self.infer_modules_masks()
         _logger.info('resolve the mask conflict')

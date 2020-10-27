@@ -10,6 +10,26 @@ import torchvision
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+def get_list(list_node):
+    """
+    Get the list of values from the list construct node.
+    Parameters
+    ---------
+    list_node: Torch.C.Value
+        The cpp node of the target list.
+    Returns
+    -------
+    values: list
+        The list of values in the target cpp list node.
+    """
+    # the node that create the list
+    create_node = list_node.node()
+    assert create_node.kind() == 'prim::ListConstruct'
+    inputs = list(create_node.inputs())
+    values = []
+    for _i in inputs:
+        values.append(_i.toIValue())
+    return values
 
 def dropout_python(node):
     return torch.dropout
@@ -29,7 +49,14 @@ def relu_python(node):
     return torch.relu
 
 def mean_python(node):
-    return torch.mean
+    c_node = node.key_node
+    inputs = list(c_node.inputs())
+    dim_list = get_list(inputs[1])
+    keep_dim = inputs[2].toIValue()
+    print(dim_list)
+    print(keep_dim)
+    new_mean = partial(torch.mean, dim=tuple(dim_list), keepdim=keep_dim)
+    return new_mean
 
 def add_python(node):
     return torch.add
