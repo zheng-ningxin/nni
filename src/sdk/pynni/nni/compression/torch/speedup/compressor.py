@@ -5,12 +5,12 @@ import queue
 import logging
 import torch
 import copy
-from nni.compression.torch.utils.mask_conflict import fix_mask_conflict, fix_group_conflict
+from nni.compression.torch.utils.mask_conflict import fix_mask_conflict
 from .compress_modules import replace_module
 from .infer_shape import ModuleMasks, infer_from_mask, infer_from_inshape, infer_from_outshape
 from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
-from .constants import AutoMaskInferenceType
+
 from ..utils.shape_dependency import ADD_TYPES, CAT_TYPE, MUL_TYPES
 from .sparsity_conflicts import calc_unmask
 _logger = logging.getLogger(__name__)
@@ -45,27 +45,36 @@ class ModelSpeedup:
     This class is to speedup the model with provided weight mask
     """
 
-    def __init__(self, model, dummy_input, masks_file):
+    def __init__(self, model, dummy_input, masks_file, confidence=32):
         """
         Parameters
         ----------
         model : pytorch model
             The model user wants to speed up
         dummy_input : pytorch tensor
-            The dummy input for ```jit.trace```, users should put it on the right device before pass in
+            Note: The first dimension of the dummy_input should be the batchsize.
+            The dummy input for ```jit.trace```, users should put it on the right
+            device before pass in
         masks_file : str
             The path of user provided mask file
         map_location : str
             the device on which masks are placed, same to map_location in ```torch.load```
+            confidence: the confidence coefficient of the sparsity inference. This value is
+            actually used as the batchsize of the dummy_input.
         """
+        assert confidence > 1
         from nni._graph_utils import build_module_graph
         # The auto inference will change the values of the parameters in the model
         # so we need make a copy before the mask inference
         self.ori_state_dict = copy.deepcopy(model.state_dict())
         self.bound_model = model
         self.inferred_masks = dict()  # key: module_name, value: ModuleMasks
-        self.dummy_input = dummy_input
-        self.torch_graph = build_module_graph(model, dummy_input)
+        input_shape = list(dummy_input.size())
+        # set the batchsize to the confidence ratio
+        input_shape[0] = confidence
+        self.dummy_input = torch.rand(tuple(input_shape)).to(dummy_input.device)
+
+        self.torch_graph = build_module_graph(model, self.dummy_input)
         # dict object to save the auto inferences objects of the submodules
         self.auto_inferences = {}
         # the index dict to find the corresponding torch._C.Value object
@@ -224,12 +233,8 @@ class ModelSpeedup:
         """
         # get the corresponding auto mask inference class according
         # to the config
-        if node.op_type not in AutoMaskInferenceType:
-            errmsg = 'The auto inference type of %s is not specified! Please specify the \
-                auto mask inference type in constants.py!' % str(node.op_type)
-            raise Exception(errmsg)
 
-        AutoMaskInferenceClass = AutoMaskInferenceType[node.op_type]
+        AutoMaskInferenceClass = AutoMaskInference
         print("Creating auto inference for")
         print(node.unique_name)
         print(node.op_type)
@@ -267,6 +272,7 @@ class ModelSpeedup:
             _auto_infer = AutoMaskInferenceClass(
                 module, dummy_input, in_masks, weight_mask)
         self.auto_inferences[unique_name] = _auto_infer
+        _auto_infer.name = node.unique_name
         # _auto_infer.update()
         _auto_infer.update_direct_sparsity()
         # also save the input debug names into the auto_infer
@@ -549,12 +555,11 @@ class ModelSpeedup:
         _logger.info("start to speed up the model")
         self.initialize_speedup()
         training = self.bound_model.training
-        fix_group_conflict(self.masks, self.bound_model, self.dummy_input)
+        fix_mask_conflict(self.masks, self.bound_model, self.dummy_input)
         _logger.info("infer module masks...")
         self.infer_modules_masks()
         _logger.info('resolve the mask conflict')
-        self.resolve_conflicts()
-        # TODO self.resolve_group_conflict()
+        # self.resolve_conflicts()
         # load the original stat dict before replace the model
         self.bound_model.load_state_dict(self.ori_state_dict)
         _logger.info("replace compressed modules...")

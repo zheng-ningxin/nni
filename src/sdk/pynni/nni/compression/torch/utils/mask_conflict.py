@@ -4,7 +4,7 @@ import os
 import logging
 import torch
 import numpy as np
-from .shape_dependency import ChannelDependency, GroupDependency, CatPaddingDependency
+from .shape_dependency import ChannelDependency, GroupDependency
 # logging.basicConfig(level = logging.DEBUG)
 _logger = logging.getLogger('FixMaskConflict')
 
@@ -43,45 +43,9 @@ def fix_mask_conflict(masks, model=None, dummy_input=None, traced=None):
     masks = fix_group_mask.fix_mask()
     fix_channel_mask = ChannelMaskConflict(masks, model, dummy_input, traced)
     masks = fix_channel_mask.fix_mask()
-    padding_cat_mask = CatMaskPadding(masks, model, dummy_input, traced)
-    masks = padding_cat_mask.fix_mask()
     return masks
 
 
-def fix_group_conflict(masks, model=None, dummy_input=None, traced=None):
-    """
-    MaskConflict fix the mask conflict for the channel dependencies
-    and group dependency.
-
-    Parameters
-    ----------
-    masks : dict/str
-        A dict object that stores the masks or the path of the mask file
-    model : torch.nn.Module
-        model to fix the mask conflict
-    dummy_input : torch.Tensor
-        input example to trace the model
-    traced : torch._C.torch.jit.TopLevelTracedModule
-        the traced model of the target model, is this parameter is not None,
-        we donnot use the model and dummpy_input to get the trace graph.
-    """
-    if isinstance(masks, str):
-        # if the input is the path of the mask_file
-        assert os.path.exists(masks)
-        masks = torch.load(masks)
-    # if the user uses the model and dummy_input to trace the model, we
-    # should get the traced model handly, so that, we only trace the
-    # model once, GroupMaskConflict and ChannelMaskConflict will reuse
-    # this traced model.
-    if traced is None:
-        assert model is not None and dummy_input is not None
-        with torch.onnx.set_training(model, False):
-            # We need to trace the model in this way, else it will have problems
-            traced = torch.jit.trace(model, dummy_input)
-
-    fix_group_mask = GroupMaskConflict(masks, model, dummy_input, traced)
-    masks = fix_group_mask.fix_mask()
-    return masks    
 
 class MaskFix:
     def __init__(self, masks, model=None, dummy_input=None, traced=None):
@@ -106,66 +70,6 @@ class MaskFix:
         Export the masks after fixing the conflict to file.
         """
         torch.save(self.masks, path)
-
-class CatMaskPadding(MaskFix):
-    def __init__(self, masks, model, dummy_input=None, traced=None):
-        """
-        CatMaskPadding find the layers whose output tensor is passed
-        to the same cat operation. The cat operation concatnates the
-        masks of the input tensors as the output mask, so when some
-        of the input layers of the cat operation are not pruned, we still
-        need to pass the masks of these non-pruned layers(the mask are
-        all ones) to the cat operation to ensure the shape of the output
-        mask is right.
-
-        Parameters
-        ----------
-        masks : dict
-            a dict object that stores the masks
-        model : torch.nn.Module
-            model to fix the mask conflict
-        dummy_input : torch.Tensor
-            input example to trace the model
-        traced : torch._C.torch.jit.TopLevelTracedModule
-            the traced model of the target model, is this parameter is not None,
-            we donnot use the model and dummpy_input to get the trace graph.
-        """
-        super(CatMaskPadding, self).__init__(masks, model, dummy_input, traced)
-
-    def fix_mask(self):
-        cat_padding_depen = CatPaddingDependency(self.model, self.dummy_input, self.traced)
-        name_to_module = {}
-        for name, module in self.model.named_modules():
-            name_to_module[name] = module
-        depen = cat_padding_depen.dependency_sets
-        for layers in depen:
-            device = None
-            count = 0
-            for layer in layers:
-                if layer in self.masks:
-                    count += 1
-                    if device is None:
-                        device = self.masks[layer]['weight'].device
-            if count == 0:
-                # no layer is pruned
-                continue
-            elif count == len(layers):
-                # all the layers have been pruned
-                continue
-            # pad the mask for the non-pruned layers
-            for layer in layers:
-                if layer in self.masks:
-                    continue
-                module = name_to_module[layer]
-                w_shape = module.weight.data.size()
-                w_mask = torch.ones(w_shape).to(device)
-                b_mask = None
-                if hasattr(module, 'bias') and module.bias is not None:
-                    # module.bias may be None
-                    b_shape = module.bias.data.size()
-                    b_mask = torch.ones(b_shape).to(device)
-                self.masks[layer] = {'weight':w_mask, 'bias':b_mask}
-        return self.masks
 
 
 
