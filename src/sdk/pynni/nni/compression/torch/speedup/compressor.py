@@ -45,7 +45,7 @@ class ModelSpeedup:
     This class is to speedup the model with provided weight mask
     """
 
-    def __init__(self, model, dummy_input, masks_file, confidence=32):
+    def __init__(self, model, dummy_input, masks_file, confidence=32, enable_compile=False):
         """
         Parameters
         ----------
@@ -61,6 +61,11 @@ class ModelSpeedup:
             the device on which masks are placed, same to map_location in ```torch.load```
             confidence: the confidence coefficient of the sparsity inference. This value is
             actually used as the batchsize of the dummy_input.
+        confidence: int
+            The number of examples used to infer the mask.
+        compile: bool
+            If this flag is enabled, we will modify the network architecture to resolve
+            the sparsity conflict.
         """
         assert confidence > 1
         from nni._graph_utils import build_module_graph
@@ -90,6 +95,9 @@ class ModelSpeedup:
         self.masks = torch.load(masks_file, str(self.device))
         # self.internal_result save the internal output of the submodules
         self.internal_result = {}
+        # if we enable the compilation of the sparsity, then we will modify the network
+        # architecture to resolve the sparsity conflict.
+        self.enable_compile = enable_compile
 
     # def infer_module_mask(self, module_name, last_module, mask=None, in_shape=None, out_shape=None):
     #     """
@@ -392,24 +400,105 @@ class ModelSpeedup:
         """
         with torch.no_grad():
             for unique_name in self.auto_inferences:
-                g_node = self.torch_graph.name_to_node[unique_name]
-                _logger.debug("replace %s, in %s type, with op_type %s",
-                            unique_name, g_node.type, g_node.op_type)
-                auto_infer = self.auto_inferences[unique_name]
-                if g_node.type == 'module':
-                    super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
-                    m_type = g_node.op_type
-                    if not m_type in replace_module:
-                        raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
-                    _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
-                    compressed_module = replace_module[m_type](leaf_module, auto_infer)
-                    setattr(super_module, g_node.name.split('.')[-1], compressed_module)
-                elif g_node.type == 'func':
-                    _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
-                                unique_name, g_node.op_type)
-                else:
-                    raise RuntimeError("Unsupported node type: {}".format(g_node.type))
+                self.replace_submodule(unique_name)
 
+    def replace_submodule(self, unique_name, reindex=None):
+        """
+        Replace the submodule according to the inferred sparsity.
+        unique_name: str
+            The unique_name of the submodule to replace.
+        """
+        class ReindexModule(nn.Module):
+            def __init__(self, ori_module, reindex_dim, reindex):
+                super(ReindexModule, self).__init__()
+                self.ori_module = ori_module
+                self.reindex = reindex
+                
+            def forward(self, x):
+                tmpout =  self.ori_module(x)
+                shape = list(tmpout.size())
+                shape[reindex_dim] = reindex.size(0)
+                out = torch.zeros(tuple(shape), device=tmpout.device)
+                out[]
+                return out
+        assert unique_name in self.auto_inferences
+        g_node = self.torch_graph.name_to_node[unique_name]
+        _logger.debug("replace %s, in %s type, with op_type %s",
+                    unique_name, g_node.type, g_node.op_type)
+        auto_infer = self.auto_inferences[unique_name]
+        if g_node.type == 'module':
+            super_module, leaf_module = get_module_by_name(self.bound_model, g_node.name)
+            m_type = g_node.op_type
+            if not m_type in replace_module:
+                raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
+            _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
+            compressed_module = replace_module[m_type](leaf_module, auto_infer)
+            setattr(super_module, g_node.name.split('.')[-1], compressed_module)
+            return compressed_module
+        elif g_node.type == 'func':
+            _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
+                        unique_name, g_node.op_type)
+            return None
+        else:
+            raise RuntimeError("Unsupported node type: {}".format(g_node.type))
+
+
+    def compile_sparse_modules(self):
+        """
+        Compile the sparsity into the modules of the model, in this way, we can utilize
+        as much sparsity as possible. Note: we may change the network architecture in
+        this function. If the user prefer to keep the original network architecture, then
+        set the `enable_compile` flag to false.
+        """
+
+        with torch.no_grad():
+            # build the out_degree table for the nodes in the model
+            out_degree = {}
+            visit_queue = queue.Queue()
+            for node in self.torch_graph.nodes_py.nodes_op:
+                successors = self.torch_graph.find_successors(node.unique_name)
+                out_degree[node.unique_name] = len(successors)
+                if out_degree[node.unique_name] == 0:
+                    # if this node doesn't have any successor nodes
+                    visit_queue.put((node, None))
+            replaced = set()
+            # backward traverse the model graph and find the operators that have shape
+            # dependencies
+            while not visit_queue.empty():
+                cur_node, remain_unmask = visit_queue.get()
+                if cur_node.unique_name not in replaced:
+                    # if this not is not replaced yet
+                    _auto_infer = self.auto_inferences[cur_node.unique_name]
+                    _logger.debug('Resolve conflict for %s', cur_node.unique_name)
+                    new_unmask = self.need_to_unmask(cur_node)
+                    if unmask is not None:
+                        for i, tensor in enumerate(unmask):
+                            if tensor is not None:
+                                # The reason why we use the input_debugname in the _auto_infer
+                                # rather the cur_node.inputs is that the cur_node.inputs have
+                                # the parameters of the modules (weight, bias), and this is caused by
+                                # the merging rules when we build the TorchModuleGraph. In TorchModuleGraph
+                                # we merge the node based on its scope name and the 'prim::GetAttr' node of
+                                # weight tensor has no scope name.
+                                debugname = _auto_infer.input_debugname[i]
+                                print('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
+                                print('Find conflict at ', cur_node.name)
+                                self.unmask_chain(debugname, tensor)
+                    else:
+                        # if thers isn't a sparsit conflict, than we directly replace
+                        # this module
+                        self.replace_submodule(cur_node.unique_name)
+                        replaced.add(cur_node.unique_name)
+
+                predecessors = self.torch_graph.find_predecessors(cur_node.unique_name)
+                for predecessor in predecessors:
+                    out_degree[predecessor] -= 1
+                    if out_degree[predecessor] == 0:
+                        visit_queue.put(self.torch_graph.name_to_node[predecessor])
+
+            # Resolve the channel sparsity conflict by padding zeros
+            pass
+            # Resolve the group sparsity conflict by splitting OPs
 
     def need_to_unmask(self, node):
         """
@@ -493,6 +582,7 @@ class ModelSpeedup:
         unmask some values/channels and padde zeros to make the shapes of the input tensors are the
         same.
         """
+
         # build the out_degree table for the nodes in the model
         out_degree = {}
         visit_queue = queue.Queue()
@@ -555,7 +645,10 @@ class ModelSpeedup:
         _logger.info("start to speed up the model")
         self.initialize_speedup()
         training = self.bound_model.training
-        fix_mask_conflict(self.masks, self.bound_model, self.dummy_input)
+        if not self.enable_compile:
+            # if we cannot modify the network sparsity, then we should resolve
+            # the sparsity conflict by unmask some sparse values.
+            fix_mask_conflict(self.masks, self.bound_model, self.dummy_input)
         _logger.info("infer module masks...")
         self.infer_modules_masks()
         _logger.info('resolve the mask conflict')
@@ -563,6 +656,10 @@ class ModelSpeedup:
         # load the original stat dict before replace the model
         self.bound_model.load_state_dict(self.ori_state_dict)
         _logger.info("replace compressed modules...")
-        self.replace_compressed_modules()
+        if not self.enable_compile:
+            # the mask conflict should be already resolved
+            self.replace_compressed_modules()
+        else:
+            self.compile_sparse_modules()
         self.bound_model.train(training)
         _logger.info("speedup done")
