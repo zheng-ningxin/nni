@@ -4,6 +4,8 @@
 import queue
 import logging
 import torch
+import torch.nn as nn
+import numpy as np
 import copy
 from nni.compression.torch.utils.mask_conflict import fix_mask_conflict
 from .compress_modules import replace_module
@@ -402,25 +404,34 @@ class ModelSpeedup:
             for unique_name in self.auto_inferences:
                 self.replace_submodule(unique_name)
 
-    def replace_submodule(self, unique_name, reindex=None):
+    def replace_submodule(self, unique_name, reindex_dim=None, reindex=None):
         """
         Replace the submodule according to the inferred sparsity.
         unique_name: str
             The unique_name of the submodule to replace.
+        reindex_dim: int
+            The dimension of the re-index operation.
+        reindex: Reindex
+            The index tensor. Normally this variable is None. If we want to reindex the
+            output of this submodule, we can pass the index by this parameter.
         """
         class ReindexModule(nn.Module):
             def __init__(self, ori_module, reindex_dim, reindex):
                 super(ReindexModule, self).__init__()
                 self.ori_module = ori_module
                 self.reindex = reindex
-                
+                tmp_index = [slice(None, None) for i in range(reindex_dim+1)]
+                # the index for the tensor
+                tmp_index[reindex_dim] = reindex
+                self.t_index = tuple(tmp_index)
             def forward(self, x):
                 tmpout =  self.ori_module(x)
                 shape = list(tmpout.size())
-                shape[reindex_dim] = reindex.size(0)
-                out = torch.zeros(tuple(shape), device=tmpout.device)
-                out[]
+                shape[self.reindex_dim] = self.reindex.size(0)
+                out = torch.zeros(tuple(shape), device=tmpout.device, requires_grad=tmpout.requires_grad)
+                out[self.t_index] = tmpout
                 return out
+
         assert unique_name in self.auto_inferences
         g_node = self.torch_graph.name_to_node[unique_name]
         _logger.debug("replace %s, in %s type, with op_type %s",
@@ -433,8 +444,14 @@ class ModelSpeedup:
                 raise RuntimeError("Has not supported replacing the module: `{}`".format(m_type))
             _logger.info("replace module (name: %s, op_type: %s)", g_node.name, m_type)
             compressed_module = replace_module[m_type](leaf_module, auto_infer)
-            setattr(super_module, g_node.name.split('.')[-1], compressed_module)
-            return compressed_module
+            new_submodule = compressed_module
+            if reindex_dim is None:
+                setattr(super_module, g_node.name.split('.')[-1], compressed_module)
+            elif reindex_dim is not None and reindex is not None:
+                # reindex the output of this submodule and replace the orginal module
+                new_submodule = ReindexModule(compressed_module, reindex_dim, reindex)
+                setattr(super_module, g_node.name.split('.')[-1], new_submodule)
+            return new_submodule
         elif g_node.type == 'func':
             _logger.info("Warning: cannot replace (name: %s, op_type: %s) which is func type",
                         unique_name, g_node.op_type)
@@ -461,40 +478,66 @@ class ModelSpeedup:
                 if out_degree[node.unique_name] == 0:
                     # if this node doesn't have any successor nodes
                     visit_queue.put((node, None))
-            replaced = set()
             # backward traverse the model graph and find the operators that have shape
             # dependencies
             while not visit_queue.empty():
+                # remain_unmask is the unmask tensors passed by the successor nodes
+                # for example, the relu node is a function and we cannot replace
+                # the function node in the model, so the unmask tensor which should be
+                # handled by the relu node can only be passed to the predecessor nodes.
                 cur_node, remain_unmask = visit_queue.get()
-                if cur_node.unique_name not in replaced:
                     # if this not is not replaced yet
-                    _auto_infer = self.auto_inferences[cur_node.unique_name]
-                    _logger.debug('Resolve conflict for %s', cur_node.unique_name)
-                    new_unmask = self.need_to_unmask(cur_node)
-                    if unmask is not None:
-                        for i, tensor in enumerate(unmask):
-                            if tensor is not None:
-                                # The reason why we use the input_debugname in the _auto_infer
-                                # rather the cur_node.inputs is that the cur_node.inputs have
-                                # the parameters of the modules (weight, bias), and this is caused by
-                                # the merging rules when we build the TorchModuleGraph. In TorchModuleGraph
-                                # we merge the node based on its scope name and the 'prim::GetAttr' node of
-                                # weight tensor has no scope name.
-                                debugname = _auto_infer.input_debugname[i]
-                                print('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
-                                print('Find conflict at ', cur_node.name)
-                                self.unmask_chain(debugname, tensor)
-                    else:
-                        # if thers isn't a sparsit conflict, than we directly replace
-                        # this module
-                        self.replace_submodule(cur_node.unique_name)
-                        replaced.add(cur_node.unique_name)
+                _logger.debug('Resolve conflict for %s', cur_node.unique_name)
+                new_unmask = self.need_to_unmask(cur_node)
+                reindex_dim = 1 if remain_unmask is not None else None
+                reindex = remain_unmask == False if remain_unmask is not None else None
+                # We try to reindex the output of this node to resolve the unmask request
+                # passed from the successor nodes.
 
-                predecessors = self.torch_graph.find_predecessors(cur_node.unique_name)
-                for predecessor in predecessors:
-                    out_degree[predecessor] -= 1
-                    if out_degree[predecessor] == 0:
-                        visit_queue.put(self.torch_graph.name_to_node[predecessor])
+                success = self.replace_submodule(cur_node.unique_name, reindex_dim, reindex)
+                if success:
+                    remain_unmask = None
+              
+
+                if new_unmask is not None:
+                    for i, tensor in enumerate(new_unmask):
+                        if tensor is not None:
+                            # The reason why we use the input_debugname in the _auto_infer
+                            # rather the cur_node.inputs is that the cur_node.inputs have
+                            # the parameters of the modules (weight, bias), and this is caused by
+                            # the merging rules when we build the TorchModuleGraph. In TorchModuleGraph
+                            # we merge the node based on its scope name and the 'prim::GetAttr' node of
+                            # weight tensor has no scope name.
+                            debugname = _auto_infer.input_debugname[i]
+                            predecessor = self.torch_graph.output_to_node[debugname]
+                            out_degree[predecessor.unique_name] -= 1
+                            # NOTE: Currently, compiling cannot handle the situation that a tensor is broadcast
+                            # to several add Ops(fix_mask_conflict can handle this scenario). We cannot decide the
+                            # unmask/reindex tensor from only one Add operator. Fortunately, there is no such structure
+                            # in common networks.
+                            # TODO May support the secenario mentioned above in the future
+                            errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
+                                     enable_compile to False and try again!"
+                            assert out_degree[predecessor.unique_name] == 0, errmsg
+                            # Note: the remain_unmask has the same number of channels with new_unmask[i]
+                            if remain_unmask is not None:
+                            # we cannot resolve the reindex at this node, because this node may be a
+                            # function and we cannot reindex the output of a function node, so we need
+                            # to pass the unmask to the predecessor nodes.
+                                new_unmask[i] += remain_unmask
+                            visit_queue.push(predecessor, new_unmask[i])
+                else:
+                    predecessors = self.torch_graph.find_predecessors(cur_node.unique_name)
+                    for predecessor in predecessors:
+                        out_degree[predecessor] -= 1
+                        if remain_unmask is not None:
+                            # Currently the compiling cannot handle the scenario that a op is the input of two add
+                            # operators.
+                            errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
+                                     enable_compile to False and try again!"
+                            assert out_degree[predecessor] == 0, errmsg
+                        if out_degree[predecessor] == 0:
+                            visit_queue.put(self.torch_graph.name_to_node[predecessor], remain_unmask)
 
             # Resolve the channel sparsity conflict by padding zeros
             pass
@@ -526,6 +569,17 @@ class ModelSpeedup:
         input_masks = auto_infer.in_masks
         output_mask = auto_infer.output_mask
         unmask = calc_unmask(node, input_masks, output_mask)
+        # Reduce the mask of the whole tensor into the channel mask
+        c_unmask = []
+        for t_unmask in unmask:
+            if t_unmask is not None:
+                shape = list(t_unmask.size())
+                dim_list = list(range(len(shape))
+                dim_list.remove(1)
+                _count = np.prod(shape) / shape[1]
+                # reduce the element-wise unmask tensor to the channel-wise unmask tensor
+                sum_unmask = torch.sum(remain_unmask, dim_list)
+                c_unmask.append(sum_unmask == _count)
         return unmask
 
     def unmask_chain(self, debugname, t_unmask):
