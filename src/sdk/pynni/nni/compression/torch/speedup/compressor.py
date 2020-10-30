@@ -14,7 +14,7 @@ from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
 
 from ..utils.shape_dependency import ADD_TYPES, CAT_TYPE, MUL_TYPES
-from .sparsity_conflicts import calc_unmask, calc_reindex
+from .sparsity_conflicts import calc_unmask, calc_padding
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
@@ -430,6 +430,7 @@ class ModelSpeedup:
                 self.t_index = tuple(tmp_index)
 
             def forward(self, x):
+                print(unique_name)
                 tmpout = self.ori_module(x)
                 shape = list(tmpout.size())
                 shape[self.reindex_dim] = self.reindex.size(0)
@@ -490,8 +491,9 @@ class ModelSpeedup:
             # build the out_degree table for the nodes in the model
             out_degree = {}
             visit_queue = queue.Queue()
-            # Store the unmask tensors that passed to the node
-            channel_unmasks = {}
+            # Store the padding and unmask tensors
+            padding_map = {}
+            unmask_map = {}
             for node in self.torch_graph.nodes_py.nodes_op:
                 successors = self.torch_graph.find_successors(node.unique_name)
                 out_degree[node.unique_name] = len(successors)
@@ -501,37 +503,47 @@ class ModelSpeedup:
             # backward traverse the model graph and find the operators that have shape
             # dependencies
             while not visit_queue.empty():
-                # remain_unmask is the unmask tensors passed by the successor nodes
+                # remain_padding is the unmask tensors passed by the successor nodes
                 # for example, the relu node is a function and we cannot replace
                 # the function node in the model, so the unmask tensor which should be
                 # handled by the relu node can only be passed to the predecessor nodes.
                 cur_node = visit_queue.get()
-                # Get the unmask tensors from the channel_unmasks
-                if cur_node.unique_name in channel_unmasks:
-                    remain_unmask = channel_unmasks[cur_node.unique_name]
+                # Get the padding tensors from the padding_map
+                if cur_node.unique_name in padding_map:
+                    remain_padding = padding_map[cur_node.unique_name]
+                    remain_unmask = unmask_map[cur_node.unique_name]
                 else:
+                    remain_padding = None
                     remain_unmask = None
-
                 # if this not is not replaced yet
                 _logger.debug('Sparisty Compiling %s', cur_node.unique_name)
                 # calculate the unmask tensor for this node
-                new_unmask = self.calc_reindex(cur_node)
-                # If there are some values that need be unmasked
-                reindex_dim = 1 if remain_unmask is not None else None
-                # convert the unmask tensor to the reindex tensor
-                reindex = remain_unmask == False if remain_unmask is not None else None
-                # We try to reindex the output of this node to resolve the unmask request
-                # passed from the successor nodes.
-
-                success = self.replace_submodule(
-                    cur_node.unique_name, reindex_dim, reindex)
-                if success is not None:
-                    # we have resovle the conflict by reindex the output
-                    remain_unmask = None
+                new_padding, new_unmask = self.calc_paddingindex(cur_node)
 
                 _auto_infer = self.auto_inferences[cur_node.unique_name]
-                if new_unmask is not None:
-                    for i, tensor in enumerate(new_unmask):
+                assert isinstance(_auto_infer.output_mask, torch.Tensor)
+                
+                if remain_padding is not None:
+                    # since we change the output of this node by padding zeros, so
+                    # we also need to unmask the correponding values in the _auto_infer.output_mask
+                    # so that, the successor node will take the right shape. And this will interfere
+                    # with the replacement of the current node (because the output_mask has been changed)
+                    # So, we need to replace the modules that need the padding operators before
+                    # those nodes who don't. We have to update the output_mask to make sure
+                    # that the successor has the right input shape,
+                    _replaced = self.replace_submodule(cur_node.unique_name, 1, remain_padding==False)
+                    # print(remain_unmask)
+                    pos = remain_unmask > 0
+                    print(pos)
+                    _auto_infer.output_mask[pos] = 1
+                    if _replaced is not None:
+                        # we can resovle the conflict by reindex the output of this module,
+                        # so we don't need to pass the remained padding zeros to the predecessor
+                        # nodes
+                        remain_padding = None
+                        remain_unmask = None
+                if new_padding is not None:
+                    for i, tensor in enumerate(new_padding):
                         if tensor is not None:
                             # The reason why we use the input_debugname in the _auto_infer
                             # rather the cur_node.inputs is that the cur_node.inputs have
@@ -543,21 +555,23 @@ class ModelSpeedup:
                             predecessor = self.torch_graph.output_to_node[debugname]
                             out_degree[predecessor.unique_name] -= 1
 
-                            # Note: the remain_unmask has the same number of channels with new_unmask[i]
-                            if remain_unmask is not None:
+                            # Note: the remain_padding has the same number of channels with new_padding[i]
+                            if remain_padding is not None:
                                 # we cannot resolve the reindex at this node, because this node may be a
                                 # function and we cannot reindex the output of a function node, so we need
                                 # to pass the unmask to the predecessor nodes.
+                                new_padding[i] += remain_padding
                                 new_unmask[i] += remain_unmask
-                            if predecessor.unique_name not in channel_unmasks:
-                                channel_unmasks[predecessor.unique_name] = new_unmask[i]
+                            if predecessor.unique_name not in padding_map:
+                                padding_map[predecessor.unique_name] = new_padding[i]
+                                unmask_map[predecessor.unique_name] = new_unmask[i]
                             else:                                
                                 # NOTE: Currently, compiling cannot handle the situation that a tensor is broadcast
                                 # to several add Ops(fix_mask_conflict can handle this scenario). We cannot decide the
                                 # unmask/reindex tensor from only one Add operator. Fortunately, there is no such structure
                                 # in common networks.
                                 # TODO May support the secenario mentioned above in the future
-                                assert all(new_unmask[1] == channel_unmasks[predecessor.unique_name])
+                                assert all(new_padding[1] == padding_map[predecessor.unique_name])
                             if out_degree[predecessor.unique_name] == 0:
                                 visit_queue.put(predecessor)
                 else:
@@ -566,22 +580,28 @@ class ModelSpeedup:
                         cur_node.unique_name)
                     for predecessor in predecessors:
                         out_degree[predecessor] -= 1
-                        if remain_unmask is not None:
-                            if predecessor.unique_name not in channel_unmasks:
-                                channel_unmasks[predecessor.unique_name] = remain_unmask
+                        if remain_padding is not None:
+                            if predecessor.unique_name not in padding_map:
+                                padding_map[predecessor.unique_name] = remain_padding
+                                unmask_map[predecessor.unique_name] = remain_unmask
                             else:
                                 # Currently the compiling cannot handle the scenario that a op is the input of two add
                                 # operators.
                                 errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
                                      enable_compile to False and try again!"
-                                assert all(remain_unmask == channel_unmasks[predecessor.unique_name]), errmsg
+                                assert all(remain_padding == padding_map[predecessor.unique_name]), errmsg
                         if out_degree[predecessor] == 0:
                             visit_queue.put(self.torch_graph.name_to_node[predecessor])
-            for node in channel_unmasks:
-                print('Pruned channel', node, torch.sum(channel_unmasks[node]))
+            for node in padding_map:
+                print('Pruned channel', node, torch.sum(padding_map[node]))
+            # replace the submodule that don't need the padding operators
+            # according the inferred sparsity
+            # If there are some values that need be unmasked
+            for unique_name in self.auto_inferences:
+                if unique_name not in padding_map:
+                    self.replace_submodule(unique_name)
 
-
-    def calc_reindex(self, node):
+    def calc_paddingindex(self, node):
         """
         Calculate the reindex tensor for this node. If this node has sparsity
         conflict then we will return a reindex tensor for each of its input, else
@@ -592,18 +612,27 @@ class ModelSpeedup:
             The target node to caculate the reindex tenosr for its output.
         Returns
         -------
-        reindexs: list
-            List of the channel-wise reindex tensor for each input of this node. 
+        padding: list of tensor
+            List of tensor, each tensor indicates the channel-wise index of a input
+            to padding the zeros. Note: this tensor is calculated based on the shape
+            after the pruning.
+        unmask: list of tensor
+
         """
         if node.op_type not in ADD_TYPES and node.op_type not in MUL_TYPES \
             and node.op_type != CAT_TYPE:
-            return None
+            return None, None
         unique_name = node.unique_name
         auto_infer = self.auto_inferences[unique_name]
         input_masks = auto_infer.in_masks
         output_mask = auto_infer.output_mask
-        reindexes = calc_reindex(node, input_masks, output_mask)
-        return reindexes
+        # The difference between the padding and the unmask is that
+        # the padding is calculated based on the shape that after pruning,
+        # and the unmask is calculated based on the shape that befer the actual
+        # pruning.
+        padding = calc_padding(node, input_masks, output_mask)
+        unmask = calc_unmask(node, input_masks, output_mask)
+        return padding, unmask
 
 
     def need_to_unmask(self, node):

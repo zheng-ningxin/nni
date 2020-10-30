@@ -47,7 +47,7 @@ def add_conflict_unmask(node, input_masks, output_mask):
             need_unmask[i] = None
     return need_unmask
 
-def add_conflict_reindex(node, input_masks, output_mask):
+def add_conflict_padding(node, input_masks, output_mask):
     """
     Return the reindex tensor of each input. This function should only
     be called while using structure pruning.
@@ -97,12 +97,12 @@ ConflictUnmask = {
 
 }
 
-ConflictReindex = {
+ConflictPadding = {
     'aten::cat': cat_conflict,
-    'aten::add': add_conflict_reindex,
-    'aten::add_': add_conflict_reindex,
-    'aten::mul': add_conflict_reindex,
-    'aten::mul_': add_conflict_reindex
+    'aten::add': add_conflict_padding,
+    'aten::add_': add_conflict_padding,
+    'aten::mul': add_conflict_padding,
+    'aten::mul_': add_conflict_padding
 
 }
 
@@ -110,6 +110,6 @@ def calc_unmask(node, input_masks, output_mask):
     cacl_func = ConflictUnmask[node.op_type]
     return cacl_func(node, input_masks, output_mask)
 
-def calc_reindex(node, input_masks, output_mask):
-    calc_func = ConflictReindex[node.op_type]
+def calc_padding(node, input_masks, output_mask):
+    calc_func = ConflictPadding[node.op_type]
     return calc_func(node, input_masks, output_mask)
