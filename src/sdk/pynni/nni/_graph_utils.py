@@ -244,6 +244,7 @@ class TorchModuleGraph(TorchGraph):
     def __init__(self, model=None, dummy_input=None, traced_model=None):
         super().__init__(model, dummy_input, traced_model)
         self.global_count = 0
+        self.reused_module = set()
         self.name_to_node, self.input_to_node, self.output_to_node = self._build_graph()
         self._extract_auxiliary_info()
 
@@ -656,6 +657,8 @@ class TorchModuleGraph(TorchGraph):
                     unique_name = module_name
                     if use_count > 0:
                         unique_name = module_name + '.%d' % use_count
+                        self.reused_module.add(unique_name)
+                        self.reused_module.add(module_name)
                     node_group = self._expand_module_node(
                         node, module_name, unique_name, module_to_type[module_name],
                         node_cpps, input_to_node, output_to_node, 'module')

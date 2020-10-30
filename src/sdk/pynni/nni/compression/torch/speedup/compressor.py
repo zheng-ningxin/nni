@@ -448,6 +448,10 @@ class ModelSpeedup:
                       unique_name, g_node.type, g_node.op_type)
         auto_infer = self.auto_inferences[unique_name]
         if g_node.type == 'module':
+            if g_node.unique_name in self.torch_graph.reused_module:
+                if reindex_dim is not None:
+                    _logger.warning('Cannot replace a reused module with padding operator!!')
+                    return None
             super_module, leaf_module = get_module_by_name(
                 self.bound_model, g_node.name)
             m_type = g_node.op_type
@@ -518,11 +522,10 @@ class ModelSpeedup:
                 # if this not is not replaced yet
                 _logger.debug('Sparisty Compiling %s', cur_node.unique_name)
                 # calculate the unmask tensor for this node
-                new_padding, new_unmask = self.calc_paddingindex(cur_node)
 
                 _auto_infer = self.auto_inferences[cur_node.unique_name]
                 assert isinstance(_auto_infer.output_mask, torch.Tensor)
-                
+                _remain_resolved = None
                 if remain_padding is not None:
                     # since we change the output of this node by padding zeros, so
                     # we also need to unmask the correponding values in the _auto_infer.output_mask
@@ -531,17 +534,22 @@ class ModelSpeedup:
                     # So, we need to replace the modules that need the padding operators before
                     # those nodes who don't. We have to update the output_mask to make sure
                     # that the successor has the right input shape,
-                    _replaced = self.replace_submodule(cur_node.unique_name, 1, remain_padding==False)
-                    # print(remain_unmask)
-                    pos = remain_unmask > 0
-                    print(pos)
-                    _auto_infer.output_mask[pos] = 1
-                    if _replaced is not None:
-                        # we can resovle the conflict by reindex the output of this module,
-                        # so we don't need to pass the remained padding zeros to the predecessor
-                        # nodes
-                        remain_padding = None
-                        remain_unmask = None
+                    _remain_resolved = self.replace_submodule(cur_node.unique_name, 1, remain_padding==False)
+      
+                if  _remain_resolved is None:
+                    new_padding, new_unmask = self.calc_paddingindex(cur_node, remain_unmask)
+                    if remain_padding is not None:
+                        pos = remain_unmask > 0
+                        _auto_infer.output_mask[pos] = 1
+                else:
+                    # we can resovle the conflict by reindex the output of this module,
+                    # so we don't need to pass the remained padding zeros to the predecessor
+                    # nodes
+                    new_padding, new_unmask = self.calc_paddingindex(cur_node, None)
+                    if remain_padding is not None:
+                        pos = remain_unmask > 0
+                        _auto_infer.output_mask[pos] = 1
+                    remain_padding = remain_unmask = None
                 if new_padding is not None:
                     for i, tensor in enumerate(new_padding):
                         if tensor is not None:
@@ -555,13 +563,6 @@ class ModelSpeedup:
                             predecessor = self.torch_graph.output_to_node[debugname]
                             out_degree[predecessor.unique_name] -= 1
 
-                            # Note: the remain_padding has the same number of channels with new_padding[i]
-                            if remain_padding is not None:
-                                # we cannot resolve the reindex at this node, because this node may be a
-                                # function and we cannot reindex the output of a function node, so we need
-                                # to pass the unmask to the predecessor nodes.
-                                new_padding[i] += remain_padding
-                                new_unmask[i] += remain_unmask
                             if predecessor.unique_name not in padding_map:
                                 padding_map[predecessor.unique_name] = new_padding[i]
                                 unmask_map[predecessor.unique_name] = new_unmask[i]
@@ -581,15 +582,15 @@ class ModelSpeedup:
                     for predecessor in predecessors:
                         out_degree[predecessor] -= 1
                         if remain_padding is not None:
-                            if predecessor.unique_name not in padding_map:
-                                padding_map[predecessor.unique_name] = remain_padding
-                                unmask_map[predecessor.unique_name] = remain_unmask
+                            if predecessor not in padding_map:
+                                padding_map[predecessor] = remain_padding
+                                unmask_map[predecessor] = remain_unmask
                             else:
                                 # Currently the compiling cannot handle the scenario that a op is the input of two add
                                 # operators.
                                 errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
                                      enable_compile to False and try again!"
-                                assert all(remain_padding == padding_map[predecessor.unique_name]), errmsg
+                                assert all(remain_padding == padding_map[predecessor]), errmsg
                         if out_degree[predecessor] == 0:
                             visit_queue.put(self.torch_graph.name_to_node[predecessor])
             for node in padding_map:
@@ -601,7 +602,7 @@ class ModelSpeedup:
                 if unique_name not in padding_map:
                     self.replace_submodule(unique_name)
 
-    def calc_paddingindex(self, node):
+    def calc_paddingindex(self, node, remain_unmask):
         """
         Calculate the reindex tensor for this node. If this node has sparsity
         conflict then we will return a reindex tensor for each of its input, else
@@ -630,8 +631,12 @@ class ModelSpeedup:
         # the padding is calculated based on the shape that after pruning,
         # and the unmask is calculated based on the shape that befer the actual
         # pruning.
-        padding = calc_padding(node, input_masks, output_mask)
-        unmask = calc_unmask(node, input_masks, output_mask)
+        if remain_unmask is not None:
+            padding = calc_padding(node, input_masks, output_mask + remain_unmask)
+            unmask = calc_unmask(node, input_masks, output_mask + remain_unmask)
+        else:
+            padding = calc_padding(node, input_masks, output_mask)
+            unmask = calc_unmask(node, input_masks, output_mask)
         return padding, unmask
 
 
