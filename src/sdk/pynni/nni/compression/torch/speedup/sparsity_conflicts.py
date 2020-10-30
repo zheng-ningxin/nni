@@ -10,7 +10,7 @@ def cat_conflict(node, input_masks, output_masks):
     # TODO does cat need to resolve the mask conflict?
     pass
 
-def add_conflict(node, input_masks, output_mask):
+def add_conflict_unmask(node, input_masks, output_mask):
     """
     Find the positions of the input masks that need
     to be unmasked to resolve the mask conflicts.
@@ -47,15 +47,69 @@ def add_conflict(node, input_masks, output_mask):
             need_unmask[i] = None
     return need_unmask
 
+def add_conflict_reindex(node, input_masks, output_mask):
+    """
+    Return the reindex tensor of each input. This function should only
+    be called while using structure pruning.
+
+    Parameters
+    ----------
+    node: NodePyGroup
+        The add operation node that to resolve conflict.
+    input_masks: list
+        List of tensors, each element corresponds to a mask tensor of inputs.
+    output_mask: torch.Tensor
+        The mask of the output tensor.
+    Returns
+    ------
+    need_unmask: list
+        This list has the same length with input masks. The element of the list
+        will be None or torch.Tensor, if it is None, then the corresponding input
+        mask doesn't need to unmask any value, else we should unmask the values in the
+        tensor.
+    """
+    
+    # in the add operation, we should align the input mask
+    # with the output mask.
+    assert isinstance(input_masks, list)
+    assert isinstance(output_mask, torch.Tensor)
+    # reduce the mask in channel-dimension
+    shape = list(output_mask.size())
+    dim_list = list(range(len(shape)))
+    dim_list.remove(1)
+    out_c_sum = torch.sum(output_mask, dim_list)
+    input_c_sum = [torch.sum(x, dim_list) for x in input_masks]
+    # c_out_prund = out_c_sum == 0
+    c_out_remained = out_c_sum > 0
+    reindexes = []
+    for c_in_mask in input_c_sum:
+        c_pruned = c_in_mask == 0
+        reindexes.append(c_pruned[c_out_remained])
+    return reindexes
+
+
 ConflictUnmask = {
     'aten::cat': cat_conflict,
-    'aten::add': add_conflict,
-    'aten::add_': add_conflict,
-    'aten::mul': add_conflict,
-    'aten::mul_': add_conflict
+    'aten::add': add_conflict_unmask,
+    'aten::add_': add_conflict_unmask,
+    'aten::mul': add_conflict_unmask,
+    'aten::mul_': add_conflict_unmask
+
+}
+
+ConflictReindex = {
+    'aten::cat': cat_conflict,
+    'aten::add': add_conflict_reindex,
+    'aten::add_': add_conflict_reindex,
+    'aten::mul': add_conflict_reindex,
+    'aten::mul_': add_conflict_reindex
 
 }
 
 def calc_unmask(node, input_masks, output_mask):
     cacl_func = ConflictUnmask[node.op_type]
     return cacl_func(node, input_masks, output_mask)
+
+def calc_reindex(node, input_masks, output_mask):
+    calc_func = ConflictReindex[node.op_type]
+    return calc_func(node, input_masks, output_mask)

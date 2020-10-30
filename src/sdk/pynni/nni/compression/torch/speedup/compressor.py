@@ -14,7 +14,7 @@ from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
 
 from ..utils.shape_dependency import ADD_TYPES, CAT_TYPE, MUL_TYPES
-from .sparsity_conflicts import calc_unmask
+from .sparsity_conflicts import calc_unmask, calc_reindex
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
@@ -422,6 +422,7 @@ class ModelSpeedup:
             def __init__(self, ori_module, reindex_dim, reindex):
                 super(ReindexModule, self).__init__()
                 self.ori_module = ori_module
+                self.reindex_dim = reindex_dim
                 self.reindex = reindex
                 tmp_index = [slice(None, None) for i in range(reindex_dim+1)]
                 # the index for the tensor
@@ -434,6 +435,9 @@ class ModelSpeedup:
                 shape[self.reindex_dim] = self.reindex.size(0)
                 out = torch.zeros(tuple(shape), device=tmpout.device,
                                   requires_grad=tmpout.requires_grad)
+                print(self.t_index)
+                print('Output shape')
+                print(shape)
                 out[self.t_index] = tmpout
                 return out
 
@@ -474,7 +478,7 @@ class ModelSpeedup:
         """
         Reconstruct the model according to the inferred sparsity, compared to modifying the mask to
         resolve the conflict, we will try to utilize as more sparsity as possible to speedup the whole
-        model. 
+        model.
         Note: we may change the network architecture in this function. If the user prefer to keep
         the original network architecture, please set the `enable_compile` flag to false.
         In addtion, currently the compiling engine cannot support all possible models (for example,
@@ -486,12 +490,14 @@ class ModelSpeedup:
             # build the out_degree table for the nodes in the model
             out_degree = {}
             visit_queue = queue.Queue()
+            # Store the unmask tensors that passed to the node
+            channel_unmasks = {}
             for node in self.torch_graph.nodes_py.nodes_op:
                 successors = self.torch_graph.find_successors(node.unique_name)
                 out_degree[node.unique_name] = len(successors)
                 if out_degree[node.unique_name] == 0:
                     # if this node doesn't have any successor nodes
-                    visit_queue.put((node, None))
+                    visit_queue.put(node)
             # backward traverse the model graph and find the operators that have shape
             # dependencies
             while not visit_queue.empty():
@@ -499,10 +505,17 @@ class ModelSpeedup:
                 # for example, the relu node is a function and we cannot replace
                 # the function node in the model, so the unmask tensor which should be
                 # handled by the relu node can only be passed to the predecessor nodes.
-                cur_node, remain_unmask = visit_queue.get()
+                cur_node = visit_queue.get()
+                # Get the unmask tensors from the channel_unmasks
+                if cur_node.unique_name in channel_unmasks:
+                    remain_unmask = channel_unmasks[cur_node.unique_name]
+                else:
+                    remain_unmask = None
+
                 # if this not is not replaced yet
-                _logger.debug('Resolve conflict for %s', cur_node.unique_name)
-                new_unmask = self.need_to_unmask(cur_node)
+                _logger.debug('Sparisty Compiling %s', cur_node.unique_name)
+                # calculate the unmask tensor for this node
+                new_unmask = self.calc_reindex(cur_node)
                 # If there are some values that need be unmasked
                 reindex_dim = 1 if remain_unmask is not None else None
                 # convert the unmask tensor to the reindex tensor
@@ -529,39 +542,69 @@ class ModelSpeedup:
                             debugname = _auto_infer.input_debugname[i]
                             predecessor = self.torch_graph.output_to_node[debugname]
                             out_degree[predecessor.unique_name] -= 1
-                            # NOTE: Currently, compiling cannot handle the situation that a tensor is broadcast
-                            # to several add Ops(fix_mask_conflict can handle this scenario). We cannot decide the
-                            # unmask/reindex tensor from only one Add operator. Fortunately, there is no such structure
-                            # in common networks.
-                            # TODO May support the secenario mentioned above in the future
-                            errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
-                                     enable_compile to False and try again!"
-                            assert out_degree[predecessor.unique_name] == 0, errmsg
+
                             # Note: the remain_unmask has the same number of channels with new_unmask[i]
                             if remain_unmask is not None:
                                 # we cannot resolve the reindex at this node, because this node may be a
                                 # function and we cannot reindex the output of a function node, so we need
                                 # to pass the unmask to the predecessor nodes.
                                 new_unmask[i] += remain_unmask
-                            visit_queue.put((predecessor, new_unmask[i]))
+                            if predecessor.unique_name not in channel_unmasks:
+                                channel_unmasks[predecessor.unique_name] = new_unmask[i]
+                            else:                                
+                                # NOTE: Currently, compiling cannot handle the situation that a tensor is broadcast
+                                # to several add Ops(fix_mask_conflict can handle this scenario). We cannot decide the
+                                # unmask/reindex tensor from only one Add operator. Fortunately, there is no such structure
+                                # in common networks.
+                                # TODO May support the secenario mentioned above in the future
+                                assert all(new_unmask[1] == channel_unmasks[predecessor.unique_name])
+                            if out_degree[predecessor.unique_name] == 0:
+                                visit_queue.put(predecessor)
                 else:
+                    # No conflict found here
                     predecessors = self.torch_graph.find_predecessors(
                         cur_node.unique_name)
                     for predecessor in predecessors:
                         out_degree[predecessor] -= 1
                         if remain_unmask is not None:
-                            # Currently the compiling cannot handle the scenario that a op is the input of two add
-                            # operators.
-                            errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
+                            if predecessor.unique_name not in channel_unmasks:
+                                channel_unmasks[predecessor.unique_name] = remain_unmask
+                            else:
+                                # Currently the compiling cannot handle the scenario that a op is the input of two add
+                                # operators.
+                                errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
                                      enable_compile to False and try again!"
-                            assert out_degree[predecessor] == 0, errmsg
+                                assert all(remain_unmask == channel_unmasks[predecessor.unique_name]), errmsg
                         if out_degree[predecessor] == 0:
-                            visit_queue.put(
-                                (self.torch_graph.name_to_node[predecessor], remain_unmask))
+                            visit_queue.put(self.torch_graph.name_to_node[predecessor])
+            for node in channel_unmasks:
+                print('Pruned channel', node, torch.sum(channel_unmasks[node]))
 
-            # Resolve the channel sparsity conflict by padding zeros
-            pass
-            # Resolve the group sparsity conflict by splitting OPs
+
+    def calc_reindex(self, node):
+        """
+        Calculate the reindex tensor for this node. If this node has sparsity
+        conflict then we will return a reindex tensor for each of its input, else
+        this function will just return None.
+        Parameters
+        ----------
+        node: Node NodePyGroup
+            The target node to caculate the reindex tenosr for its output.
+        Returns
+        -------
+        reindexs: list
+            List of the channel-wise reindex tensor for each input of this node. 
+        """
+        if node.op_type not in ADD_TYPES and node.op_type not in MUL_TYPES \
+            and node.op_type != CAT_TYPE:
+            return None
+        unique_name = node.unique_name
+        auto_infer = self.auto_inferences[unique_name]
+        input_masks = auto_infer.in_masks
+        output_mask = auto_infer.output_mask
+        reindexes = calc_reindex(node, input_masks, output_mask)
+        return reindexes
+
 
     def need_to_unmask(self, node):
         """
@@ -600,7 +643,7 @@ class ModelSpeedup:
                 # reduce the element-wise unmask tensor to the channel-wise unmask tensor
                 sum_unmask = torch.sum(t_unmask, dim_list)
                 c_unmask.append(sum_unmask == _count)
-        return unmask
+        return c_unmask
 
     def unmask_chain(self, debugname, t_unmask):
         """
@@ -671,7 +714,7 @@ class ModelSpeedup:
             cur_node = visit_queue.get()
             _auto_infer = self.auto_inferences[cur_node.unique_name]
             _logger.debug('Resolve conflict for %s', cur_node.unique_name)
-            unmask = self.need_to_unmask(cur_node)
+            unmask = self.calc_reindex(cur_node)
             if unmask is not None:
                 for i, tensor in enumerate(unmask):
                     if tensor is not None:
