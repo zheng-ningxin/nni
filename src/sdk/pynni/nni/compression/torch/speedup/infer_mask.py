@@ -120,7 +120,7 @@ class AutoMaskInference:
                         self.in_masks[tid] + \
                         (1-self.in_masks[tid]) * self.in_constants[tid]
 
-                    print(in_tensor.data)
+                    # print(in_tensor.data)
             # apply the weight mask
             for para in self.weights:
                 if para in self.weight_mask:
@@ -153,7 +153,7 @@ class AutoMaskInference:
         # calculate the mean value of the output among the batch dimension
         mean = torch.mean(tout, dim=0)
         mask_pos = std < STD_DELTA
-        print(mask_pos)
+        # print(mask_pos)
         for bid in range(tout.size(0)):
             # Set the mask and constant for each the output tensor
             out_mask[bid][mask_pos] = 0

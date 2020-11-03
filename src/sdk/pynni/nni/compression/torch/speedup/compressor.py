@@ -247,10 +247,10 @@ class ModelSpeedup:
         # to the config
 
         AutoMaskInferenceClass = AutoMaskInference
-        print("Creating auto inference for")
-        print(node.unique_name)
-        print(node.op_type)
-        print(AutoMaskInferenceClass)
+        # print("Creating auto inference for")
+        # print(node.unique_name)
+        # print(node.op_type)
+        # print(AutoMaskInferenceClass)
         # this name is consistent with the name returned by named_modules()
         module_name = node.name
         _logger.info('Update mask for %s', module_name)
@@ -436,15 +436,15 @@ class ModelSpeedup:
                 self.t_index = tuple(tmp_index)
 
             def forward(self, x):
-                print(unique_name)
+                # print(unique_name)
                 tmpout = self.ori_module(x)
                 shape = list(tmpout.size())
                 shape[self.reindex_dim] = self.reindex.size(0)
                 out = torch.zeros(tuple(shape), device=tmpout.device,
                                   requires_grad=tmpout.requires_grad)
-                print(self.t_index)
-                print('Output shape')
-                print(shape)
+                # print(self.t_index)
+                # print('Output shape')
+                # print(shape)
                 out[self.t_index] = tmpout
                 return out
 
@@ -607,7 +607,7 @@ class ModelSpeedup:
                             visit_queue.put(
                                 self.torch_graph.name_to_node[predecessor])
             for node in padding_map:
-                print('Pruned channel', node, torch.sum(padding_map[node]))
+                # print('Pruned channel', node, torch.sum(padding_map[node]))
             # replace the submodule that don't need the padding operators
             # according the inferred sparsity
             # If there are some values that need be unmasked
@@ -728,7 +728,7 @@ class ModelSpeedup:
         # print(unmasks)
         # print('!!!!!!!!')
         for dname, _unmask in zip(debugnames, unmasks):
-            print(dname, _unmask)
+            # print(dname, _unmask)
             self.unmask_chain(dname, _unmask)
 
     def resolve_conflicts(self):
@@ -773,8 +773,8 @@ class ModelSpeedup:
                         # we merge the node based on its scope name and the 'prim::GetAttr' node of
                         # weight tensor has no scope name.
                         debugname = _auto_infer.input_debugname[i]
-                        print('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
-                        print('Find conflict at ', cur_node.name)
+                        # print('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
+                        # print('Find conflict at ', cur_node.name)
                         self.unmask_chain(debugname, tensor)
             predecessors = self.torch_graph.find_predecessors(
                 cur_node.unique_name)

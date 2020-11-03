@@ -292,15 +292,15 @@ def replace_conv2d(conv, auto_infer):
         # For conv, we can only fold the input constant into
         # bias when all the constant in the same channel are the
         # same.
-        print('CONSTANT HERE!!')
-        print(in_constant)
+        # print('CONSTANT HERE!!')
+        # print(in_constant)
         # exit(-1)
         # set the bias to zero and calculate the folded bias for new conv
         if conv.bias is not None:
             conv.bias.data[:] = 0
         bias_constant = torch.index_select(
             conv(in_constant)[0], 0, remained_out)
-        print(bias_constant)
+        # print(bias_constant)
         # exit(-1)
         return BiasModule(new_conv, bias_constant)
     else:
