@@ -22,6 +22,8 @@ replace_module = {
     'Dropout3d': lambda module, auto_infer: no_replace(module, auto_infer)
 }
 
+NEED_FOLD_BIAS = True
+
 
 def convert_to_coarse_mask(t_mask, dim):
     """
@@ -84,12 +86,12 @@ def replace_linear(linear, auto_infer):
     assert isinstance(linear, nn.Linear)
     assert len(auto_infer.in_masks) == 1
     assert isinstance(auto_infer.output_mask, torch.Tensor)
-    # in_mask = auto_infer.in_masks[0]
-    # output_mask = auto_infer.output_mask
+    in_mask = auto_infer.in_masks[0]
+    output_mask = auto_infer.output_mask
     weight_mask = auto_infer.weight_mask['weight']
-
-    pruned_in, remained_in = convert_to_coarse_mask(weight_mask, 1)
-    pruned_out, remained_out = convert_to_coarse_mask(weight_mask, 0)
+    # N C K
+    pruned_in, remained_in = convert_to_coarse_mask(in_mask, 1)
+    pruned_out, remained_out = convert_to_coarse_mask(output_mask, 1)
     n_remained_in = weight_mask.size(1) - pruned_in.size(0)
     n_remained_out = weight_mask.size(0) - pruned_out.size(0)
     remained_in, remained_out = remained_in.to(
@@ -131,6 +133,8 @@ def replace_batchnorm2d(norm, auto_infer):
     assert isinstance(norm, nn.BatchNorm2d)
     in_mask = auto_infer.in_masks[0]
     output_mask = auto_infer.output_mask
+    # print('BN CONSTANT')
+    # print(auto_infer.in_constants[0])
     # N, C, H, W
     _, remained_in = convert_to_coarse_mask(in_mask, 1)
     _, remained_out = convert_to_coarse_mask(output_mask, 1)
@@ -154,6 +158,16 @@ def replace_batchnorm2d(norm, auto_infer):
     return new_norm
 
 
+class BiasModule(nn.Module):
+    def __init__(self, module, bias):
+        super(BiasModule, self).__init__()
+        self.ori_module = module
+        self.register_buffer('speedup_bias', bias)
+
+    def forward(self, x):
+        return self.ori_module(x)[:] + self.speedup_bias
+
+
 def replace_conv2d(conv, auto_infer):
     """
     Parameters
@@ -173,21 +187,22 @@ def replace_conv2d(conv, auto_infer):
     # the conv layer should only have one input tensor
     assert len(auto_infer.in_masks) == 1
     in_mask = auto_infer.in_masks[0]
+    in_constant = auto_infer.in_constants[0]
     output_mask = auto_infer.output_mask
     weight_mask = auto_infer.weight_mask['weight']
     pruned_in, remained_in = convert_to_coarse_mask(in_mask, 1)
     pruned_out, remained_out = convert_to_coarse_mask(output_mask, 1)
-    print('%%%%%%%%%%%%%%%%%')
-    print(remained_out)
-    print('Output mask')
-    print(output_mask)
+    # print('%%%%%%%%%%%%%%%%%')
+    # print(remained_out)
+    # # print('Output mask')
+    # print(output_mask)
 
     if pruned_in.size(0) == 0 and pruned_out.size(0)==0:
         # if this is not structurally pruned at all
         return conv
     n_remained_in = weight_mask.size(1) - pruned_in.size(0)
     n_remained_out = weight_mask.size(0) - pruned_out.size(0)
-    print(n_remained_out)
+    # print(n_remained_out)
 
     assert n_remained_in == remained_in.size(0)
     assert n_remained_out == remained_out.size(0)
@@ -236,6 +251,12 @@ def replace_conv2d(conv, auto_infer):
 
     _logger.debug("replace conv2d with in_channels: %d, out_channels: %d",
                   n_remained_in, n_remained_out)
+    in_constant = in_constant * (1-in_mask)
+    in_constant = in_constant[:1]
+    # need_bias is a flag that indicates that if a conv layer need
+    # bias, if the original conv doesn't have a bias and there is
+    # no constant need to be folded into the bias, the need_bias is False.
+    need_bias = conv.bias is not None
     new_conv = torch.nn.Conv2d(in_channels=n_remained_in,
                                out_channels=n_remained_out,
                                kernel_size=conv.kernel_size,
@@ -243,7 +264,7 @@ def replace_conv2d(conv, auto_infer):
                                padding=conv.padding,
                                dilation=conv.dilation,
                                groups=new_groups,
-                               bias=conv.bias is not None,
+                               bias=need_bias,
                                padding_mode=conv.padding_mode)
 
     new_conv.to(conv.weight.device)
@@ -252,5 +273,22 @@ def replace_conv2d(conv, auto_infer):
     if conv.bias is not None:
         new_conv.bias.data.copy_(torch.index_select(
             conv.bias.data, 0, remained_out))
+    
+    if NEED_FOLD_BIAS and torch.sum(in_constant) > 0:
+        # Fold the input constants into the new_conv bias
+        # For conv, we can only fold the input constant into
+        # bias when all the constant in the same channel are the
+        # same.
+        print('CONSTANT HERE!!')
+        print(in_constant)
+        # exit(-1)
+        # set the bias to zero and calculate the folded bias for new conv
+        if conv.bias is not None:
+            conv.bias.data[:] = 0
+        bias_constant = torch.index_select(conv(in_constant)[0], 0, remained_out)
+        print(bias_constant)
+        # exit(-1)
+        return BiasModule(new_conv, bias_constant)
+    else:
 
-    return new_conv
+        return new_conv

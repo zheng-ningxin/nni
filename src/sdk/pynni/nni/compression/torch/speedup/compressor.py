@@ -47,7 +47,7 @@ class ModelSpeedup:
     This class is to speedup the model with provided weight mask
     """
 
-    def __init__(self, model, dummy_input, masks_file, confidence=32, enable_compile=False):
+    def __init__(self, model, dummy_input, masks_file, confidence=16, enable_compile=False):
         """
         Parameters
         ----------
@@ -96,6 +96,7 @@ class ModelSpeedup:
         # self.masks save the mask tensors pruned by the user and the infered
         # masks of the others modules
         self.masks = torch.load(masks_file, str(self.device))
+        self.constant = {}
         # self.internal_result save the internal output of the submodules
         self.internal_result = {}
         # if we enable the compilation of the sparsity, then we will modify the network
@@ -269,12 +270,15 @@ class ModelSpeedup:
         # Note: the input mask of the successor nodes are
         # already created by the predecessor node
         in_masks = [self.masks[debugname] for debugname in input_debugname]
+        in_constants = [self.constant[debugname]
+                        for debugname in input_debugname]
         if node.type == 'func':
             # we cannot get the runable function directly from the jit traced
             # graph, so we translate it back to python function
             func = jit_to_python_function(node)
             # function doesn't have weights
-            _auto_infer = AutoMaskInferenceClass(func, dummy_input, in_masks)
+            _auto_infer = AutoMaskInferenceClass(
+                func, dummy_input, in_masks, in_constants=in_constants)
         else:
             # node.type == 'module'
             weight_mask = None
@@ -282,7 +286,7 @@ class ModelSpeedup:
                 weight_mask = self.masks[module_name]
             _, module = get_module_by_name(self.bound_model, module_name)
             _auto_infer = AutoMaskInferenceClass(
-                module, dummy_input, in_masks, weight_mask)
+                module, dummy_input, in_masks, weight_mask, in_constants=in_constants, state_dict=copy.deepcopy(module.state_dict()))
         self.auto_inferences[unique_name] = _auto_infer
         _auto_infer.name = node.unique_name
         # _auto_infer.update()
@@ -297,6 +301,7 @@ class ModelSpeedup:
         out_debugname = node.outputs[0]
         # update the output mask into self.masks
         self.masks[out_debugname] = _auto_infer.output_mask
+        self.constant[out_debugname] = _auto_infer.out_constant
         # update the output result into self.internal_result, so that
         # the successor nodes can take these output tensors as inputs.
         self.internal_result[out_debugname] = _auto_infer.output
@@ -344,6 +349,7 @@ class ModelSpeedup:
                 # create the mask tensor for the input value
                 if isinstance(self.internal_result[name], torch.Tensor):
                     self.masks[name] = torch.ones_like(value)
+                    self.constant[name] = torch.zeros_like(value)
             elif nodeio.input_or_output == 'output':
                 graph_output.append((name, nodeio))
         # count the degree for the node in the graph
@@ -450,7 +456,8 @@ class ModelSpeedup:
         if g_node.type == 'module':
             if g_node.unique_name in self.torch_graph.reused_module:
                 if reindex_dim is not None:
-                    _logger.warning('Cannot replace a reused module with padding operator!!')
+                    _logger.warning(
+                        'Cannot replace a reused module with padding operator!!')
                     return None
             super_module, leaf_module = get_module_by_name(
                 self.bound_model, g_node.name)
@@ -534,10 +541,12 @@ class ModelSpeedup:
                     # So, we need to replace the modules that need the padding operators before
                     # those nodes who don't. We have to update the output_mask to make sure
                     # that the successor has the right input shape,
-                    _remain_resolved = self.replace_submodule(cur_node.unique_name, 1, remain_padding==False)
-      
-                if  _remain_resolved is None:
-                    new_padding, new_unmask = self.calc_paddingindex(cur_node, remain_unmask)
+                    _remain_resolved = self.replace_submodule(
+                        cur_node.unique_name, 1, remain_padding == False)
+
+                if _remain_resolved is None:
+                    new_padding, new_unmask = self.calc_paddingindex(
+                        cur_node, remain_unmask)
                     if remain_padding is not None:
                         pos = remain_unmask > 0
                         _auto_infer.output_mask[pos] = 1
@@ -545,7 +554,8 @@ class ModelSpeedup:
                     # we can resovle the conflict by reindex the output of this module,
                     # so we don't need to pass the remained padding zeros to the predecessor
                     # nodes
-                    new_padding, new_unmask = self.calc_paddingindex(cur_node, None)
+                    new_padding, new_unmask = self.calc_paddingindex(
+                        cur_node, None)
                     if remain_padding is not None:
                         pos = remain_unmask > 0
                         _auto_infer.output_mask[pos] = 1
@@ -566,13 +576,14 @@ class ModelSpeedup:
                             if predecessor.unique_name not in padding_map:
                                 padding_map[predecessor.unique_name] = new_padding[i]
                                 unmask_map[predecessor.unique_name] = new_unmask[i]
-                            else:                                
+                            else:
                                 # NOTE: Currently, compiling cannot handle the situation that a tensor is broadcast
                                 # to several add Ops(fix_mask_conflict can handle this scenario). We cannot decide the
                                 # unmask/reindex tensor from only one Add operator. Fortunately, there is no such structure
                                 # in common networks.
                                 # TODO May support the secenario mentioned above in the future
-                                assert all(new_padding[1] == padding_map[predecessor.unique_name])
+                                assert all(
+                                    new_padding[1] == padding_map[predecessor.unique_name])
                             if out_degree[predecessor.unique_name] == 0:
                                 visit_queue.put(predecessor)
                 else:
@@ -590,9 +601,11 @@ class ModelSpeedup:
                                 # operators.
                                 errmsg = "Compiling engine cannot compile the sparsity for this model, Please set \
                                      enable_compile to False and try again!"
-                                assert all(remain_padding == padding_map[predecessor]), errmsg
+                                assert all(remain_padding ==
+                                           padding_map[predecessor]), errmsg
                         if out_degree[predecessor] == 0:
-                            visit_queue.put(self.torch_graph.name_to_node[predecessor])
+                            visit_queue.put(
+                                self.torch_graph.name_to_node[predecessor])
             for node in padding_map:
                 print('Pruned channel', node, torch.sum(padding_map[node]))
             # replace the submodule that don't need the padding operators
@@ -621,7 +634,7 @@ class ModelSpeedup:
 
         """
         if node.op_type not in ADD_TYPES and node.op_type not in MUL_TYPES \
-            and node.op_type != CAT_TYPE:
+                and node.op_type != CAT_TYPE:
             return None, None
         unique_name = node.unique_name
         auto_infer = self.auto_inferences[unique_name]
@@ -632,13 +645,14 @@ class ModelSpeedup:
         # and the unmask is calculated based on the shape that befer the actual
         # pruning.
         if remain_unmask is not None:
-            padding = calc_padding(node, input_masks, output_mask + remain_unmask)
-            unmask = calc_unmask(node, input_masks, output_mask + remain_unmask)
+            padding = calc_padding(
+                node, input_masks, output_mask + remain_unmask)
+            unmask = calc_unmask(
+                node, input_masks, output_mask + remain_unmask)
         else:
             padding = calc_padding(node, input_masks, output_mask)
             unmask = calc_unmask(node, input_masks, output_mask)
         return padding, unmask
-
 
     def need_to_unmask(self, node):
         """
@@ -796,11 +810,13 @@ class ModelSpeedup:
         _logger.info("start to speed up the model")
         self.initialize_speedup()
         training = self.bound_model.training
-
+        # set to the evaluation mode
+        self.bound_model.train(False)
         if not self.enable_compile:
             # if we cannot modify the network sparsity, then we should resolve
             # the sparsity conflict by unmask some sparse values.
             fix_mask_conflict(self.masks, self.bound_model, self.dummy_input)
+            # exit(-1)
         _logger.info("infer module masks...")
         self.infer_modules_masks()
         _logger.info('resolve the mask conflict')
