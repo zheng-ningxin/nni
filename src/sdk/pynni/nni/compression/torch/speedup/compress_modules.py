@@ -87,6 +87,8 @@ def replace_linear(linear, auto_infer):
     assert len(auto_infer.in_masks) == 1
     assert isinstance(auto_infer.output_mask, torch.Tensor)
     in_mask = auto_infer.in_masks[0]
+    # only need the first batch of the constant
+    in_constant = auto_infer.in_constants[0][:1]
     output_mask = auto_infer.output_mask
     weight_mask = auto_infer.weight_mask['weight']
     # N C K
@@ -98,9 +100,12 @@ def replace_linear(linear, auto_infer):
         linear.weight.device), remained_out.to(linear.weight.device)
     _logger.info("replace linear with new in_features: %d, out_features: %d",
                  n_remained_in, n_remained_out)
+    need_bias = False
+    if linear.bias is not None or (NEED_FOLD_BIAS and torch.sum(in_constant > 0)):
+        need_bias = True
     new_linear = torch.nn.Linear(in_features=n_remained_in,
                                  out_features=n_remained_out,
-                                 bias=linear.bias is not None)
+                                 bias=need_bias)
     new_linear.to(linear.weight.device)
     # Copy the remained weight from the original module
     with torch.no_grad():
@@ -112,6 +117,13 @@ def replace_linear(linear, auto_infer):
         if linear.bias is not None:
             new_linear.bias.data = torch.index_select(
                 linear.bias.data, 0, remained_out)
+
+    if NEED_FOLD_BIAS and torch.sum(in_constant) > 0:
+        out = linear(in_constant)
+        bias_constant = torch.index_select(out[0], 0, remained_out)
+        if new_linear.bias is not None:
+            new_linear.bias.data += bias_constant
+    # exit(-1)
     return new_linear
 
 
@@ -197,7 +209,7 @@ def replace_conv2d(conv, auto_infer):
     # # print('Output mask')
     # print(output_mask)
 
-    if pruned_in.size(0) == 0 and pruned_out.size(0)==0:
+    if pruned_in.size(0) == 0 and pruned_out.size(0) == 0:
         # if this is not structurally pruned at all
         return conv
     n_remained_in = weight_mask.size(1) - pruned_in.size(0)
@@ -251,6 +263,7 @@ def replace_conv2d(conv, auto_infer):
 
     _logger.debug("replace conv2d with in_channels: %d, out_channels: %d",
                   n_remained_in, n_remained_out)
+    # in_constant only need to consider the first batch
     in_constant = in_constant * (1-in_mask)
     in_constant = in_constant[:1]
     # need_bias is a flag that indicates that if a conv layer need
@@ -273,7 +286,7 @@ def replace_conv2d(conv, auto_infer):
     if conv.bias is not None:
         new_conv.bias.data.copy_(torch.index_select(
             conv.bias.data, 0, remained_out))
-    
+
     if NEED_FOLD_BIAS and torch.sum(in_constant) > 0:
         # Fold the input constants into the new_conv bias
         # For conv, we can only fold the input constant into
@@ -285,7 +298,8 @@ def replace_conv2d(conv, auto_infer):
         # set the bias to zero and calculate the folded bias for new conv
         if conv.bias is not None:
             conv.bias.data[:] = 0
-        bias_constant = torch.index_select(conv(in_constant)[0], 0, remained_out)
+        bias_constant = torch.index_select(
+            conv(in_constant)[0], 0, remained_out)
         print(bias_constant)
         # exit(-1)
         return BiasModule(new_conv, bias_constant)
