@@ -606,7 +606,7 @@ class ModelSpeedup:
                         if out_degree[predecessor] == 0:
                             visit_queue.put(
                                 self.torch_graph.name_to_node[predecessor])
-            for node in padding_map:
+            # for node in padding_map:
                 # print('Pruned channel', node, torch.sum(padding_map[node]))
             # replace the submodule that don't need the padding operators
             # according the inferred sparsity

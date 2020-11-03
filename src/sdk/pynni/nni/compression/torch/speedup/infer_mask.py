@@ -210,7 +210,8 @@ class AutoMaskInference:
             out = self.module(*self.dummy_input).clone().detach()
             if isinstance(out, torch.Tensor):
                 constant = torch.zeros_like(out)
-                constant[out_mask==0] = out[out_mask == 0]
+                constant_pos = out_mask == 0
+                constant[constant_pos] = out[constant_pos]
             elif isinstance(out, (list, tuple)):
                 constant = []
                 for i, tout in enumerate(out):
