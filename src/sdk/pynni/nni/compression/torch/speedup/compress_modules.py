@@ -119,10 +119,18 @@ def replace_linear(linear, auto_infer):
                 linear.bias.data, 0, remained_out)
 
     if NEED_FOLD_BIAS and torch.sum(in_constant) > 0:
+        # we need zero the bias in the original linear before we calculate the
+        # the folded bias constant
+        if linear.bias is not None:
+            linear.bias[:] = 0
         out = linear(in_constant)
         bias_constant = torch.index_select(out[0], 0, remained_out)
         if new_linear.bias is not None:
             new_linear.bias.data += bias_constant
+    print(auto_infer.in_constants[0].size())
+    print(torch.sum(auto_infer.in_constants[0],[0]))
+    print(in_constant)
+    print(bias_constant)
     # exit(-1)
     return new_linear
 
