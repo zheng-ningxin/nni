@@ -127,10 +127,10 @@ def replace_linear(linear, auto_infer):
         bias_constant = torch.index_select(out[0], 0, remained_out)
         if new_linear.bias is not None:
             new_linear.bias.data += bias_constant
-    print(auto_infer.in_constants[0].size())
-    print(torch.sum(auto_infer.in_constants[0],[0]))
-    print(in_constant)
-    print(bias_constant)
+    # print(auto_infer.in_constants[0].size())
+    # print(torch.sum(auto_infer.in_constants[0],[0]))
+    # print(in_constant)
+    # print(bias_constant)
     # exit(-1)
     return new_linear
 
