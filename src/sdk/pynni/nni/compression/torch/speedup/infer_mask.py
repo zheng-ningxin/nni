@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import torch
 import torch.nn as nn
-
+from ..utils import torch_integer_dtype, torch_float_dtype
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.INFO)
 
@@ -79,7 +79,13 @@ class AutoMaskInference:
         with torch.no_grad():
             for tensor in self.dummy_input:
                 if isinstance(tensor, torch.Tensor):
-                    nn.init.uniform_(tensor.data, start, end)
+                    if tensor.dtype in torch_integer_dtype:
+                        # TODO how to decide the random threshold for the integer
+                        _min = torch.min(tensor)
+                        _max = torch.max(tensor)
+                        torch.randint(_min, _max+1, tensor.size(), out=tensor.data, dtype=tensor.dtype)
+                    else:
+                        nn.init.uniform_(tensor.data, start, end)
             for para in self.weights:
                 nn.init.uniform_(self.weights[para].data, start, end)
 
@@ -148,16 +154,30 @@ class AutoMaskInference:
         assert isinstance(tout, torch.Tensor)
         out_mask = torch.ones_like(tout)
         constant = torch.zeros_like(tout)
-        # calculate the std of the output among batch dimension
-        std = torch.std(tout, dim=0)
-        # calculate the mean value of the output among the batch dimension
-        mean = torch.mean(tout, dim=0)
-        mask_pos = std < STD_DELTA
-        # print(mask_pos)
-        for bid in range(tout.size(0)):
-            # Set the mask and constant for each the output tensor
-            out_mask[bid][mask_pos] = 0
-            constant[bid][mask_pos] = mean[mask_pos]
+        if tout.dtype in torch_integer_dtype:
+            # Pytorch cannot use torch.mean and torch.std to process
+            # intergers :( , so if dtype of the input tensor is integer, we need
+            # check if is the constant by ourselves
+            # Note: the first dimension should be the batch dimension
+            same = tout[:] == tout[0]
+            reduced = torch.sum(same, dim=0)
+            is_constant = reduced == tout.size(0)
+            out_mask[:,is_constant] = 0
+            constant[:, is_constant] = tout[0][is_constant]
+            
+        else:
+            # calculate the std of the output among batch dimension
+            std = torch.std(tout, dim=0)
+            # calculate the mean value of the output among the batch dimension
+            mean = torch.mean(tout, dim=0)
+            mask_pos = std < STD_DELTA
+            # print(mask_pos)
+            # for bid in range(tout.size(0)):
+            #     # Set the mask and constant for each the output tensor
+            #     out_mask[bid][mask_pos] = 0
+            #     constant[bid][mask_pos] = mean[mask_pos]
+            out_mask[:, mask_pos] = 0
+            constant[:, mask_pos] = mean[mask_pos]
         return out_mask, constant
 
     def clac_out_sparsity(self):

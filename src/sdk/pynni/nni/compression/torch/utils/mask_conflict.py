@@ -19,7 +19,7 @@ def fix_mask_conflict(masks, model=None, dummy_input=None, traced=None):
         A dict object that stores the masks or the path of the mask file
     model : torch.nn.Module
         model to fix the mask conflict
-    dummy_input : torch.Tensor
+    dummy_input : torch.Tensor/list of tensors/dict of tensors
         input example to trace the model
     traced : torch._C.torch.jit.TopLevelTracedModule
         the traced model of the target model, is this parameter is not None,

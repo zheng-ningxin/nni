@@ -14,6 +14,7 @@ from .infer_mask import AutoMaskInference
 from .jit_translate import jit_to_python_function
 
 from ..utils.shape_dependency import ADD_TYPES, CAT_TYPE, MUL_TYPES
+from ..utils import rand_like_with_shape
 from .sparsity_conflicts import calc_unmask, calc_padding
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
@@ -76,12 +77,7 @@ class ModelSpeedup:
         self.ori_state_dict = copy.deepcopy(model.state_dict())
         self.bound_model = model
         self.inferred_masks = dict()  # key: module_name, value: ModuleMasks
-        input_shape = list(dummy_input.size())
-        # set the batchsize to the confidence ratio
-        input_shape[0] = confidence
-        self.dummy_input = torch.rand(
-            tuple(input_shape)).to(dummy_input.device)
-
+        self._random_model_input(dummy_input, confidence)
         self.torch_graph = build_module_graph(model, self.dummy_input)
         # dict object to save the auto inferences objects of the submodules
         self.auto_inferences = {}
@@ -90,8 +86,6 @@ class ModelSpeedup:
         # we need the dummy_input to infer the mask automaticlly, so we save
         # the indexes from tensor's debugname to the torch._C.Value object.
         self.debugname_to_value = {}
-        # device to run the forward inference
-        self.device = dummy_input.device
         # load the mask tensor to the same device with the dummy_input
         # self.masks save the mask tensors pruned by the user and the infered
         # masks of the others modules
@@ -102,6 +96,47 @@ class ModelSpeedup:
         # if we enable the compilation of the sparsity, then we will modify the network
         # architecture to resolve the sparsity conflict.
         self.enable_compile = enable_compile
+
+
+
+    def _random_model_input(self, dummy_input, confidence):
+        input_errmsg = 'Only support the tensor, list/tuple/dict of tensors as input'
+        # Some model may use list of tensors as input, for example transformers
+        if isinstance(dummy_input, torch.Tensor):
+            input_shape = list(dummy_input.size())
+            # set the batchsize to the confidence ratio
+            input_shape[0] = confidence
+            self.dummy_input = rand_like_with_shape(input_shape)
+            self.device = dummy_input.device
+        elif isinstance(dummy_input, (tuple, list)):
+            # else if the dummy input is list/tuple
+            self.dummy_input = []
+            old_batchsize = dummy_input[0].size(0)
+            self.device = dummy_input[0].device
+            for _, t_input in enumerate(dummy_input):
+                assert isinstance(t_input, torch.Tensor), input_errmsg
+                assert t_input.size(0) == old_batchsize, 'The first dimension should be batchsize\
+                    and the batchsize of all inputs should be the same!'
+                input_shape = list(t_input.size())
+                input_shape[0] = confidence
+                # rand_func = torch.randint if t_input.dtype 
+                self.dummy_input.append(rand_like_with_shape(input_shape, t_input))
+        elif isinstance(dummy_input, dict):
+            self.dummy_input = {}
+            tmp_key = list(dummy_input.keys())[0]
+            old_batchsize = dummy_input[tmp_key].size(0)
+            self.device = dummy_input[tmp_key].device
+            for in_name, t_input  in dummy_input.items():
+                assert isinstance(t_input, torch.Tensor), input_errmsg
+                assert old_batchsize == t_input.size(0), 'The first dimension should be batchsize\
+                and the batchsize of all inputs should be the same!'      
+                input_shape = list(t_input.size())
+                input_shape[0] = confidence
+                self.dummy_input[in_name] = rand_like_with_shape(input_shape, t_input)
+        else:
+            raise TypeError(input_errmsg)
+
+
 
     # def infer_module_mask(self, module_name, last_module, mask=None, in_shape=None, out_shape=None):
     #     """
@@ -239,7 +274,7 @@ class ModelSpeedup:
 
         return dummy_input, debugnames
 
-    def update_mask(self, node):
+    def update_direct_sparsity(self, node):
         """
         Update the mask for the target node.
         """
@@ -255,14 +290,6 @@ class ModelSpeedup:
         module_name = node.name
         _logger.info('Update mask for %s', module_name)
         unique_name = node.unique_name
-        if unique_name in self.auto_inferences:
-            # if the auto inference object already in self.auto_inference, then
-            # directly update the previous one
-            # self.auto_inferences[unique_name].update()
-            _logger.info(
-                'Update the indirect sparsity for the %s', unique_name)
-            self.auto_inferences[unique_name].update_indirect_sparsity()
-            return
         # if it is the first visit to this node, then we create a corresponding auto
         # mask inference object for this node
         dummy_input, input_debugname = self._prepare_dummy_input(node)
@@ -276,6 +303,9 @@ class ModelSpeedup:
             # we cannot get the runable function directly from the jit traced
             # graph, so we translate it back to python function
             func = jit_to_python_function(node)
+            if func is None:
+                # no need to infer the sparsity for this node
+                return
             # function doesn't have weights
             _auto_infer = AutoMaskInferenceClass(
                 func, dummy_input, in_masks, in_constants=in_constants)
@@ -309,6 +339,23 @@ class ModelSpeedup:
         # print(self.masks.keys())
         self.masks[module_name] = _auto_infer.weight_mask
 
+    def update_indirect_sparsity(self, node):
+        """
+        update the indirect sparisty for the target node.
+        """
+        module_name = node.name
+        _logger.info('Update indirect sparsity for %s', module_name)
+        unique_name = node.unique_name
+        if unique_name in self.auto_inferences:
+            # if the auto inference object already in self.auto_inference, then
+            # directly update the previous one
+            # self.auto_inferences[unique_name].update()
+            _logger.info(
+                'Update the indirect sparsity for the %s', unique_name)
+            self.auto_inferences[unique_name].update_indirect_sparsity()
+
+        
+
     def _vnode_to_value(self, c_node):
         """
         translate the C Value node into the values/tensors.
@@ -317,7 +364,12 @@ class ModelSpeedup:
         assert isinstance(c_node, torch._C.Value), errmsg
         if isinstance(c_node.type(), torch._C.TensorType):
             shape = tuple(c_node.type().sizes())
-            return torch.rand(shape).to(self.device)
+            dtype = c_node.type().scalarType()
+            # TODO should use a more general way to get the input
+            if dtype.startswith('Float') or dtype.startswith('Double'):
+                return torch.rand(shape).to(self.device)
+            else:
+                return torch.randint(0,2, shape)
         else:
             value = c_node.toIValue()
             # TODO support more kinds of value node
@@ -367,7 +419,7 @@ class ModelSpeedup:
         while not visit_queue.empty():
             curnode = visit_queue.get()
             # forward mask inference for curnode
-            self.update_mask(curnode)
+            self.update_direct_sparsity(curnode)
             successors = self.torch_graph.find_successors(curnode.unique_name)
             for successor in successors:
                 in_degree[successor] -= 1
@@ -379,7 +431,7 @@ class ModelSpeedup:
                 visit_queue.put(self.torch_graph.name_to_node[unique_name])
         while not visit_queue.empty():
             curnode = visit_queue.get()
-            self.update_mask(curnode)
+            self.update_indirect_sparsity(curnode)
             predecessors = self.torch_graph.find_predecessors(
                 curnode.unique_name)
             for predecessor in predecessors:
