@@ -48,7 +48,7 @@ class ModelSpeedup:
     This class is to speedup the model with provided weight mask
     """
 
-    def __init__(self, model, dummy_input, masks_file, confidence=16, enable_compile=False):
+    def __init__(self, model, dummy_input, masks_file, batch_dim=0, confidence=16, enable_compile=False):
         """
         Parameters
         ----------
@@ -106,7 +106,7 @@ class ModelSpeedup:
             input_shape = list(dummy_input.size())
             # set the batchsize to the confidence ratio
             input_shape[0] = confidence
-            self.dummy_input = rand_like_with_shape(input_shape)
+            self.dummy_input = rand_like_with_shape(input_shape, dummy_input)
             self.device = dummy_input.device
         elif isinstance(dummy_input, (tuple, list)):
             # else if the dummy input is list/tuple
@@ -302,7 +302,7 @@ class ModelSpeedup:
         if node.type == 'func':
             # we cannot get the runable function directly from the jit traced
             # graph, so we translate it back to python function
-            func = jit_to_python_function(node)
+            func = jit_to_python_function(node, self)
             if func is None:
                 # no need to infer the sparsity for this node
                 return
@@ -366,10 +366,11 @@ class ModelSpeedup:
             shape = tuple(c_node.type().sizes())
             dtype = c_node.type().scalarType()
             # TODO should use a more general way to get the input
+            # TODO ugly code here
             if dtype.startswith('Float') or dtype.startswith('Double'):
                 return torch.rand(shape).to(self.device)
             else:
-                return torch.randint(0,2, shape)
+                return torch.randint(0, 10, shape, device=self.device)
         else:
             value = c_node.toIValue()
             # TODO support more kinds of value node

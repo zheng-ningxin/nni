@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import torch
 import torch.nn as nn
-from ..utils import torch_integer_dtype, torch_float_dtype
+from ..utils import randomize_tensor, torch_float_dtype, torch_integer_dtype
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.INFO)
 
@@ -13,7 +13,8 @@ STD_DELTA = 1e-20
 
 
 class AutoMaskInference:
-    def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, output_mask=None, name=None, in_constants=None, state_dict=None):
+    def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, \
+                output_mask=None, name=None, in_constants=None, state_dict=None):
         errmsg = '%s is not callable, should pass the nn.Module/function' % str(
             module)
         assert callable(module), errmsg
@@ -45,18 +46,21 @@ class AutoMaskInference:
             # assume the given output mask is right
             self.output_mask = output_mask
         else:
-            errmsg = 'Only support the module/function that returns tensor/tuple of tensors/list of tensors'
             if isinstance(self.output, torch.Tensor):
                 self.output_mask = torch.ones_like(self.output)
             elif isinstance(self.output, list) or isinstance(self.output, tuple):
                 self.output_mask = []
                 for o_tensor in self.output:
-                    assert isinstance(o_tensor, torch.Tensor), errmsg
-                    self.output_mask.append(torch.ones_like(o_tensor))
+                    if isinstance(o_tensor, torch.Tensor):
+                        self.output_mask.append(torch.ones_like(o_tensor))
+                    else:
+                        # if one of the outputs is not tensor, set the corresponding
+                        # mask to None
+                        self.output_mask.append(None)
             else:
-                raise ValueError(errmsg)
+                self.output_mask = None
 
-        # Initialize the parameter mask for the parameters
+        # Initialize the mask for the parameters
         self.weights = {}
         self.weight_mask = {}
         if weight_mask:
@@ -79,15 +83,10 @@ class AutoMaskInference:
         with torch.no_grad():
             for tensor in self.dummy_input:
                 if isinstance(tensor, torch.Tensor):
-                    if tensor.dtype in torch_integer_dtype:
-                        # TODO how to decide the random threshold for the integer
-                        _min = torch.min(tensor)
-                        _max = torch.max(tensor)
-                        torch.randint(_min, _max+1, tensor.size(), out=tensor.data, dtype=tensor.dtype)
-                    else:
-                        nn.init.uniform_(tensor.data, start, end)
+                    randomize_tensor(tensor, start, end)
             for para in self.weights:
-                nn.init.uniform_(self.weights[para].data, start, end)
+                randomize_tensor(self.weights[para].data, start, end)
+
 
     def zero_grad(self):
         """
@@ -154,6 +153,13 @@ class AutoMaskInference:
         assert isinstance(tout, torch.Tensor)
         out_mask = torch.ones_like(tout)
         constant = torch.zeros_like(tout)
+        # judge if tout is a scalar(tensor that only have one value)
+        if len(tout.size()) == 0:
+            # tout is a scalar tensor, for the scalar tensor, we take
+            # this scalar as a constant, usually, the scalar tensor is returned
+            # by the size() function
+            constant = tout
+            return out_mask, constant
         if tout.dtype in torch_integer_dtype:
             # Pytorch cannot use torch.mean and torch.std to process
             # intergers :( , so if dtype of the input tensor is integer, we need
@@ -162,9 +168,9 @@ class AutoMaskInference:
             same = tout[:] == tout[0]
             reduced = torch.sum(same, dim=0)
             is_constant = reduced == tout.size(0)
-            out_mask[:,is_constant] = 0
+            out_mask[:, is_constant] = 0
             constant[:, is_constant] = tout[0][is_constant]
-            
+
         else:
             # calculate the std of the output among batch dimension
             std = torch.std(tout, dim=0)
@@ -212,7 +218,6 @@ class AutoMaskInference:
                 _logger.warn(
                     'Only support the OP whose output is tensor/tuple of tensor/list of tensor')
 
-
         # We also need random the parameters of the module, because if the weight of the model has
         # a unmasked 0, then our out sparsity inference may be wrong
         # However, after radomizing the weight/parameters, the constant in the output tensors may
@@ -239,7 +244,6 @@ class AutoMaskInference:
                     sparsity_pos = out_mask[i] == 0
                     _tmp[sparsity_pos] = t_out[sparsity_pos]
                     constant.append(_tmp)
-
 
         # print('%%%%%%%%%')
         # print(out_mask[0])
@@ -332,7 +336,7 @@ class AutoMaskInference:
                 for i, _ in enumerate(out_sparsity):
                     self.output_mask[i] *= out_sparsity[i]
             else:
-                _logger.warn('Update the output sparsity Failed!')
+                _logger.warn('There is no output sparsity')
             # also save the out_constant
             self.out_constant = out_constant
 

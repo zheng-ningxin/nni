@@ -16,3 +16,18 @@ def rand_like_with_shape(shape, ori_t):
         return torch.randint(lower_bound, higher_bound+1, shape, dtype=dtype, device=device)
     else:
         return torch.rand(shape, dtype=dtype, device=device, requires_grad=require_grad)
+
+def randomize_tensor(tensor, start=1, end=10):
+    """
+    Randomize the target tensor.
+    """
+    assert isinstance(tensor, torch.Tensor)
+    if tensor.dtype in torch_integer_dtype:
+        # integer tensor can only be randomized by the torch.randint
+        torch.randint(start, end, tensor.size(), out=tensor.data, dtype=tensor.dtype)
+    else:
+        # we can use nn.init.uniform_ to randomize this tensor
+        # Note: the tensor that with integer type cannot be randomize
+        # with nn.init.uniform_
+        torch.nn.init.uniform_(tensor.data, start, end)
+    
