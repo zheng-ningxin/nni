@@ -3,7 +3,7 @@
 import torch
 
 torch_float_dtype = [torch.float, torch.float16, torch.float32, torch.float64, torch.half, torch.double]
-torch_integer_dtype = [torch.uint8, torch.int16, torch.short, torch.int16, torch.long, torch.bool]
+torch_integer_dtype = [torch.uint8, torch.int16, torch.short, torch.int32, torch.long, torch.bool]
 
 def rand_like_with_shape(shape, ori_t):
     assert isinstance(ori_t, torch.Tensor)
@@ -22,6 +22,7 @@ def randomize_tensor(tensor, start=1, end=10):
     Randomize the target tensor.
     """
     assert isinstance(tensor, torch.Tensor)
+    print(tensor.dtype)
     if tensor.dtype in torch_integer_dtype:
         # integer tensor can only be randomized by the torch.randint
         torch.randint(start, end, tensor.size(), out=tensor.data, dtype=tensor.dtype)

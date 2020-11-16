@@ -19,7 +19,8 @@ replace_module = {
     'ReLU6': lambda module, auto_infer: no_replace(module, auto_infer),
     'Dropout': lambda module, auto_infer: no_replace(module, auto_infer),
     'Dropout2d': lambda module, auto_infer: no_replace(module, auto_infer),
-    'Dropout3d': lambda module, auto_infer: no_replace(module, auto_infer)
+    'Dropout3d': lambda module, auto_infer: no_replace(module, auto_infer),
+    'LayerNorm': lambda module, auto_infer: replace_layernorm(module, auto_infer)
 }
 
 NEED_FOLD_BIAS = True
@@ -314,3 +315,26 @@ def replace_conv2d(conv, auto_infer):
     else:
 
         return new_conv
+
+def replace_layernorm(layernorm, auto_infer):
+    assert isinstance(layernorm, nn.LayerNorm)
+    assert len(auto_infer.in_masks) == 1
+    in_mask = auto_infer.in_masks[0]
+    dim_n = len(in_mask.size())
+    new_shape = []
+    for i in range(1, dim_n):
+        sum_dims = list(range(0, dim_n))
+        sum_dims.remove(i)
+        reduced = torch.sum(in_mask, sum_dims)
+        n_remained = torch.sum(reduced > 0)
+        new_shape.append(n_remained)
+    print('Original input shape')
+    print(in_mask.size())
+    print('new normalized shape')
+    print(new_shape)
+    print(dim_n)
+    print(auto_infer.in_masks)
+    print(auto_infer.name)
+    # print()
+    # exit()
+    return nn.LayerNorm(tuple(new_shape), layernorm.eps, layernorm.elementwise_affine)

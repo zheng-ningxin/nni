@@ -14,7 +14,7 @@ STD_DELTA = 1e-20
 
 class AutoMaskInference:
     def __init__(self, module, dummy_input, in_masks=None, weight_mask=None, \
-                output_mask=None, name=None, in_constants=None, state_dict=None):
+                output_mask=None, name=None, in_constants=None, state_dict=None, batch_dim=0):
         errmsg = '%s is not callable, should pass the nn.Module/function' % str(
             module)
         assert callable(module), errmsg
@@ -74,6 +74,8 @@ class AutoMaskInference:
                     self.weight_mask[name] = torch.ones_like(para.data)
         self.name = name
         self.state_dict = state_dict
+        # TODO support the other batch dimension in the future
+        self.batch_dim = batch_dim
 
     def random_init(self, start=1, end=10):
         """
@@ -107,11 +109,13 @@ class AutoMaskInference:
         Set the requires_grad of input tensor and parameters to flag.
         """
         for t_in in self.dummy_input:
-            if isinstance(t_in, torch.Tensor):
+            if isinstance(t_in, torch.Tensor) and t_in.dtype in torch_float_dtype:
+                # only float type can require the gradient
                 # enable the auto gradient
                 t_in.requires_grad_(flag)
         for para_name in self.weights:
-            self.weights[para_name].requires_grad_(flag)
+            if self.weights[para_name].dtype in torch_float_dtype:
+                self.weights[para_name].requires_grad_(flag)
 
     def apply_mask(self):
         """
@@ -225,6 +229,7 @@ class AutoMaskInference:
         # so to get the right constant to eliminate the bias between model before and after sparsity
         # inference, we need to reload its state_dict and recalculate the constant
 
+        # TODO can be optimized here, move the randomization at the begining
         if len(self.weights) > 0 and self.state_dict is not None:
             # print(self.module.weight)
 
@@ -298,6 +303,10 @@ class AutoMaskInference:
         tmp_dummy_input = [x.clone() if isinstance(
             x, torch.Tensor) else x for x in self.dummy_input]
         output = self.module(*tmp_dummy_input)
+        print(output.grad_fn)
+        if output.grad_fn is None:
+            # the output does not have the gradient function
+            return
         # Note: output maybe tensor or list/tuple of tensors
         if isinstance(output, torch.Tensor):
             output.backward(self.output_mask)

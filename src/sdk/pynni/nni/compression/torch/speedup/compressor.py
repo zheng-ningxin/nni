@@ -77,7 +77,8 @@ class ModelSpeedup:
         self.ori_state_dict = copy.deepcopy(model.state_dict())
         self.bound_model = model
         self.inferred_masks = dict()  # key: module_name, value: ModuleMasks
-        self._random_model_input(dummy_input, confidence)
+        self.batch_dim = batch_dim
+        self._random_model_input(dummy_input, confidence, batch_dim)
         self.torch_graph = build_module_graph(model, self.dummy_input)
         # dict object to save the auto inferences objects of the submodules
         self.auto_inferences = {}
@@ -96,16 +97,17 @@ class ModelSpeedup:
         # if we enable the compilation of the sparsity, then we will modify the network
         # architecture to resolve the sparsity conflict.
         self.enable_compile = enable_compile
+    
 
 
 
-    def _random_model_input(self, dummy_input, confidence):
+    def _random_model_input(self, dummy_input, confidence, batch_dim):
         input_errmsg = 'Only support the tensor, list/tuple/dict of tensors as input'
         # Some model may use list of tensors as input, for example transformers
         if isinstance(dummy_input, torch.Tensor):
             input_shape = list(dummy_input.size())
             # set the batchsize to the confidence ratio
-            input_shape[0] = confidence
+            input_shape[batch_dim] = confidence
             self.dummy_input = rand_like_with_shape(input_shape, dummy_input)
             self.device = dummy_input.device
         elif isinstance(dummy_input, (tuple, list)):
@@ -118,7 +120,7 @@ class ModelSpeedup:
                 assert t_input.size(0) == old_batchsize, 'The first dimension should be batchsize\
                     and the batchsize of all inputs should be the same!'
                 input_shape = list(t_input.size())
-                input_shape[0] = confidence
+                input_shape[batch_dim] = confidence
                 # rand_func = torch.randint if t_input.dtype 
                 self.dummy_input.append(rand_like_with_shape(input_shape, t_input))
         elif isinstance(dummy_input, dict):
@@ -131,89 +133,11 @@ class ModelSpeedup:
                 assert old_batchsize == t_input.size(0), 'The first dimension should be batchsize\
                 and the batchsize of all inputs should be the same!'      
                 input_shape = list(t_input.size())
-                input_shape[0] = confidence
+                input_shape[batch_dim] = confidence
                 self.dummy_input[in_name] = rand_like_with_shape(input_shape, t_input)
         else:
             raise TypeError(input_errmsg)
 
-
-
-    # def infer_module_mask(self, module_name, last_module, mask=None, in_shape=None, out_shape=None):
-    #     """
-    #     Infer input shape / output shape based on the module's weight mask / input shape / output shape.
-
-    #     For a module:
-    #         Infer its input and output shape from its weight mask
-    #         Infer its output shape from its input shape
-    #         Infer its input shape from its output shape
-
-    #     If its input shape is changed, continue infering its predecessors
-    #     If its output shape is changed, continue infering its successors
-
-    #     Parameters
-    #     ----------
-    #     module_name : str
-    #         The name of the node
-    #     last_module : str
-    #         The name of last visited node
-    #     mask : tensor of mask or ModuleMasks
-    #         Mask of the weights in this node (i.e., module)
-    #     in_shape : ModuleMasks
-    #         Input shape of this node
-    #     out_shape : ModuleMasks
-    #         Output shape of this node
-    #     """
-    #     input_cmask = output_cmask = None
-    #     if module_name in self.inferred_masks:
-    #         module_masks = self.inferred_masks[module_name]
-    #     else:
-    #         module_masks = ModuleMasks(module_name)
-    #         self.inferred_masks[module_name] = module_masks
-
-    #     m_type = self.torch_graph.name_to_node[module_name].op_type
-    #     _logger.debug("infer mask of module %s with op_type %s", module_name, m_type)
-    #     if mask is not None:
-    #         _logger.debug("mask is not None")
-    #         if not m_type in infer_from_mask:
-    #             raise RuntimeError(
-    #                 "Has not supported infering input/output shape from mask for module/function: `{}`, {}"
-    #                 .format(m_type, module_name))
-    #         input_cmask, output_cmask = infer_from_mask[m_type](module_masks, mask)
-    #     if in_shape is not None:
-    #         _logger.debug("in_shape is not None")
-    #         if not m_type in infer_from_inshape:
-    #             raise RuntimeError(
-    #                 "Has not supported infering output shape from input shape for module/function: `{}`, {}"
-    #                 .format(m_type, module_name))
-    #         if m_type in ['aten::view', 'aten::flatten', 'aten::mean', 'aten::reshape']:
-    #             output_cmask = infer_from_inshape[m_type](module_masks,
-    #                                                       in_shape,
-    #                                                       self.torch_graph.name_to_node[module_name].auxiliary)
-    #         elif m_type in ['aten::cat']:
-    #             # To calculate the mask for concat operation, the output shape
-    #             # , cat dimension, and the order of the input parameters.
-    #             output_cmask = infer_from_inshape[m_type](module_masks,
-    #                                                       in_shape,
-    #                                                       self.torch_graph.name_to_node[module_name].auxiliary,
-    #                                                       last_module)
-    #         else:
-    #             output_cmask = infer_from_inshape[m_type](module_masks, in_shape)
-    #     if out_shape is not None:
-    #         _logger.debug("out_shape is not None")
-    #         if not m_type in infer_from_outshape:
-    #             raise RuntimeError(
-    #                 "Has not supported infering input shape from output shape for module/function: `{}`, {}"
-    #                 .format(m_type, module_name))
-    #         input_cmask = infer_from_outshape[m_type](module_masks, out_shape)
-
-    #     if input_cmask:
-    #         predecessors = self.torch_graph.find_predecessors(module_name)
-    #         for _module_name in predecessors:
-    #             self.infer_module_mask(_module_name, module_name, out_shape=input_cmask)
-    #     if output_cmask:
-    #         successors = self.torch_graph.find_successors(module_name)
-    #         for _module_name in successors:
-    #             self.infer_module_mask(_module_name, module_name, in_shape=output_cmask)
 
     def _prepare_dummy_input(self, node):
         """
@@ -278,9 +202,6 @@ class ModelSpeedup:
         """
         Update the mask for the target node.
         """
-        # get the corresponding auto mask inference class according
-        # to the config
-
         AutoMaskInferenceClass = AutoMaskInference
         # print("Creating auto inference for")
         # print(node.unique_name)
@@ -308,7 +229,7 @@ class ModelSpeedup:
                 return
             # function doesn't have weights
             _auto_infer = AutoMaskInferenceClass(
-                func, dummy_input, in_masks, in_constants=in_constants)
+                func, dummy_input, in_masks, in_constants=in_constants, batch_dim = self.batch_dim)
         else:
             # node.type == 'module'
             weight_mask = None
@@ -316,7 +237,8 @@ class ModelSpeedup:
                 weight_mask = self.masks[module_name]
             _, module = get_module_by_name(self.bound_model, module_name)
             _auto_infer = AutoMaskInferenceClass(
-                module, dummy_input, in_masks, weight_mask, in_constants=in_constants, state_dict=copy.deepcopy(module.state_dict()))
+                module, dummy_input, in_masks, weight_mask, in_constants=in_constants, \
+                state_dict=copy.deepcopy(module.state_dict()), batch_dim=self.batch_dim)
         self.auto_inferences[unique_name] = _auto_infer
         _auto_infer.name = node.unique_name
         # _auto_infer.update()

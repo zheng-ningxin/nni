@@ -35,7 +35,7 @@ def translate_list(list_node, speedup=None):
         if speedup is not None and debugName in speedup.internal_result:
             # this value is the result of the other nodes, such as
             # ate::size
-            values.append(speedup.internal_result[debugName])
+            values.append(speedup.internal_result[debugName].item())
         else:
             # if the corresponding value is a constant
             values.append(_i.toIValue())
@@ -144,11 +144,11 @@ def view_python(node, speedup):
             super(ViewModule, self).__init__()
             self.shape = shape
             print(self.shape)
-        def forward(self, x):
-            print(x)
+        def forward(self, *args):
+            # print(x)
             # exit()
             # print(args[0])
-            return x.view(self.shape)
+            return args[0].view(self.shape)
     c_node = node.key_node
     inputs = list(c_node.inputs())
     shape = translate_list(inputs[1], speedup)
@@ -166,10 +166,45 @@ def permute_python(node, speedup):
     dim_list = translate_list(inputs[1], speedup)
     return PermuteModule(dim_list)
 
-def constructlist_python(node, speedup):
-    class ListModule(torch.nn.Module):
-        def forward(self, *args):
-            return args
+def matmul_python(node, speedup):
+    return torch.matmul
+
+def div_python(node, speedup):
+    # The second input parameter of torch.div can be a
+    # tensor or a constant, if it is a constant, we need
+    # to return
+    c_node = node.key_node
+    inputs = list(c_node.inputs())
+    if inputs[1].debugName() in speedup.internal_result:
+        # the second input parameters is the output of the other
+        # nodes
+        return torch.div
+    else:
+        other = inputs[1].toIValue()
+        new_div = partial(torch.div, other=other)
+        # print(other)
+        return new_div
+
+def softmax_python(node, speedup):
+    c_node = node.key_node
+    inputs = list(c_node.inputs())
+    dim = inputs[1].toIValue()
+    new_softmax =partial(torch.softmax, dim=dim)
+    return new_softmax
+
+def contiguous_python(node, speedup):
+    class contiguousModule(torch.nn.Module):
+        def forward(self, x):
+            return x.contiguous()
+    return contiguousModule()
+
+def gelu_python(node, speedup):
+    return torch.nn.GELU()
+
+# def constructlist_python(node, speedup):
+#     class ListModule(torch.nn.Module):
+#         def forward(self, *args):
+#             return args
 
 trans_from_jit_to_python = {
     # 'aten::cat': cat_python,
@@ -187,7 +222,13 @@ trans_from_jit_to_python = {
     'aten::t': transpose_python,
     'aten::transpose': transpose2_python,
     'aten::Int': toint_python,
-    'aten::view': view_python
+    'aten::view': view_python,
+    'aten::permute': permute_python,
+    'aten::matmul': matmul_python,
+    'aten::div': div_python,
+    'aten::softmax': softmax_python,
+    'aten::contiguous': contiguous_python,
+    'aten::gelu': gelu_python,
 }
 
 
