@@ -218,18 +218,28 @@ def replace_conv2d(conv, auto_infer):
     # # print('Output mask')
     # print(output_mask)
 
-    if pruned_in.size(0) == 0 and pruned_out.size(0) == 0:
-        # if this is not structurally pruned at all
-        return conv
-    n_remained_in = weight_mask.size(1) - pruned_in.size(0)
+    # if pruned_in.size(0) == 0 and pruned_out.size(0) == 0:
+    #     # if this is not structurally pruned at all
+    #     ori_bias = conv.bias
+    #     if conv.bias is not None:
+    #         conv.bias = torch.zeros_like(ori_bias)
+    #     bias_constant = torch.index_select(
+    #         conv(in_constant)[0], 0, remained_out)
+    #     # print(bias_constant)
+    #     # exit(-1)
+    #     conv.bias=ori_bias
+    #     return BiasModule(conv, bias_constant)
+    #     # return conv
+
+    n_remained_in = weight_mask.size(1) * conv.groups - pruned_in.size(0)
     n_remained_out = weight_mask.size(0) - pruned_out.size(0)
-    # print(n_remained_out)
+
+    print(n_remained_out, remained_out.size(0))
 
     assert n_remained_in == remained_in.size(0)
     assert n_remained_out == remained_out.size(0)
+
     k_size1, k_size2 = conv.kernel_size
-    tmp_weight = torch.ones(n_remained_out, n_remained_in, k_size1, k_size2)
-    tmp_weight = tmp_weight.to(conv.weight.device)
     # Note: We should resolve the group dependency of the conv layers before
     # run into here.
     # check if the mask tensor meets the group dependency and calculate the
@@ -238,7 +248,30 @@ def replace_conv2d(conv, auto_infer):
     ori_inchannel_step = int(conv.in_channels/conv.groups)
     # the original step size of the output channel for each group
     ori_outchannel_step = int(conv.out_channels/conv.groups)
+    # calculate the new_in_channel_step and new_outchannel_step first
     new_inchannel_step = new_outchannel_step = None
+    for groupid in range(conv.groups):
+        in_start = groupid * ori_inchannel_step
+        in_end = in_start + ori_inchannel_step
+        out_start = groupid * ori_outchannel_step
+        out_end = out_start + ori_outchannel_step
+        current_input_index = list(
+            filter(lambda x: in_start <= x and x < in_end, remained_in.tolist()))
+        current_output_index = list(
+            filter(lambda x: out_start <= x and x < out_end, remained_out.tolist()))
+        # remap the global index to the group index
+        if len(current_input_index) == 0:
+            # if the whole group are pruned
+            continue
+        else:
+            new_inchannel_step = len(current_input_index)
+            new_outchannel_step = len(current_output_index)
+            break
+    tmp_weight = torch.ones(n_remained_out, new_inchannel_step, k_size1, k_size2)
+    tmp_weight = tmp_weight.to(conv.weight.device)
+    assert n_remained_in % new_inchannel_step == 0
+    assert n_remained_out % new_outchannel_step == 0
+    
     new_groups = 0
     for groupid in range(conv.groups):
         in_start = groupid * ori_inchannel_step
@@ -255,14 +288,9 @@ def replace_conv2d(conv, auto_infer):
             # if the whole group are pruned
             assert len(current_output_index) == 0
             continue
-        # check if the number of remained channel of each group are the same
-        if new_inchannel_step:
-            assert len(current_input_index) == new_inchannel_step
-            assert len(current_output_index) == new_outchannel_step
-        else:
-            # update the number of remained channels after pruning
-            new_inchannel_step = len(current_input_index)
-            new_outchannel_step = len(current_output_index)
+        # check if the number of remained channel of each group are the same       
+        assert len(current_input_index) == new_inchannel_step
+        assert len(current_output_index) == new_outchannel_step
         # copy the weight into tmp_weight
         new_out_start = new_outchannel_step * new_groups
         new_out_end = new_out_start + new_outchannel_step
@@ -295,14 +323,24 @@ def replace_conv2d(conv, auto_infer):
     if conv.bias is not None:
         new_conv.bias.data.copy_(torch.index_select(
             conv.bias.data, 0, remained_out))
+    
+    # if auto_infer.name == 'conv2':
+    #     print('in conv2')
+    #     pos = torch.abs(in_constant) > 0.0001
+    #     print(in_constant[pos])
+        # exit()
 
-    if NEED_FOLD_BIAS and torch.sum(in_constant) > 0:
+    if NEED_FOLD_BIAS and torch.sum(torch.abs(in_constant)) > 0:
         # Fold the input constants into the new_conv bias
         # For conv, we can only fold the input constant into
         # bias when all the constant in the same channel are the
         # same.
         # print('CONSTANT HERE!!')
         # print(in_constant)
+        # pos= in_constant>0.000001
+        # print(torch.sum(pos))
+        # print(in_constant[pos])
+        # print(torch.sum(in_constant))
         # exit(-1)
         # set the bias to zero and calculate the folded bias for new conv
         if conv.bias is not None:
@@ -313,7 +351,7 @@ def replace_conv2d(conv, auto_infer):
         # exit(-1)
         return BiasModule(new_conv, bias_constant)
     else:
-
+        # print('Fuck me!!!', auto_infer.name)
         return new_conv
 
 def replace_layernorm(layernorm, auto_infer):

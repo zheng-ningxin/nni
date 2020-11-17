@@ -35,6 +35,35 @@ class Dependency:
     def export(self, filepath):
         raise NotImplementedError
 
+
+def reshape_break_channel_dependency(op_node):
+    """
+    The reshape operations such as (reshape, view, flatten) may break
+    the channel dependency. We need to check the input parameters of
+    these reshape operations to check if this reshape node will break
+    the channel dependency. However, it's complicated to analyze the the input
+    parameters for each reshape function and infer if it will break the channel
+    dependency. So currently, we just check if the input channel and the output
+    channel is the same, if so, then we can say the original reshape function
+    doesn't want to change the number of the channels, which means the channel
+    dependency is not broken. In contrast, the original reshap operation wants
+    to change the number of channels, so it breaks the channel dependency.
+
+    Parameters
+    ----------
+    opnode: NodePyOP
+        A Op node of the graph.
+    Returns
+    -------
+    bool
+        If this operation will break the channel dependency.
+    """
+    in_shape = op_node.auxiliary['in_shape']
+    out_shape = op_node.auxiliary['out_shape']
+    in_channel = in_shape[1]
+    out_channel = out_shape[1]
+    return in_channel != out_channel
+
 class ChannelDependency(Dependency):
     def __init__(self, model=None, dummy_input=None, traced_model=None):
         """
@@ -76,6 +105,9 @@ class ChannelDependency(Dependency):
                 # find the first met conv
                 parent_layers.append(curnode.name)
                 continue
+            elif curnode.op_type in RESHAPE_OPS:
+                if reshape_break_channel_dependency(curnode):
+                    continue
             parents = self.graph.find_predecessors(curnode.unique_name)
             parents = [self.graph.name_to_node[name] for name in parents]
             for parent in parents:
@@ -173,7 +205,7 @@ class ChannelDependency(Dependency):
         d_sets = []
         visited = set()
         for node in self.graph.nodes_py.nodes_op:
-            if node.op_type != 'Conv2d' or node in visited:
+            if (node.op_type != 'Conv2d' and node.op_type != 'Linear') or node in visited:
                 continue
             tmp_set = set()
             if node.name not in self.dependency:
@@ -186,33 +218,7 @@ class ChannelDependency(Dependency):
             d_sets.append(tmp_set)
         return d_sets
 
-def reshape_break_channel_dependency(op_node):
-    """
-    The reshape operations such as (reshape, view, flatten) may break
-    the channel dependency. We need to check the input parameters of
-    these reshape operations to check if this reshape node will break
-    the channel dependency. However, it's complicated to analyze the the input
-    parameters for each reshape function and infer if it will break the channel
-    dependency. So currently, we just check if the input channel and the output
-    channel is the same, if so, then we can say the original reshape function
-    doesn't want to change the number of the channels, which means the channel
-    dependency is not broken. In contrast, the original reshap operation wants
-    to change the number of channels, so it breaks the channel dependency.
 
-    Parameters
-    ----------
-    opnode: NodePyOP
-        A Op node of the graph.
-    Returns
-    -------
-    bool
-        If this operation will break the channel dependency.
-    """
-    in_shape = op_node.auxiliary['in_shape']
-    out_shape = op_node.auxiliary['out_shape']
-    in_channel = in_shape[1]
-    out_channel = out_shape[1]
-    return in_channel != out_channel
 
 class InputChannelDependency(ChannelDependency):
     """
