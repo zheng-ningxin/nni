@@ -201,6 +201,21 @@ def contiguous_python(node, speedup):
 def gelu_python(node, speedup):
     return torch.nn.GELU()
 
+
+def cat_python(node, speedup):
+    class CatModule(torch.nn.Module):
+        def __init__(self, cat_dim):
+            super(CatModule, self).__init__()
+            self.cat_dim = cat_dim
+        def forward(self, *args):
+            return torch.cat(args, dim=self.cat_dim)
+
+    c_node = node.key_node
+    inputs = list(c_node.inputs())
+    dim = inputs[1].toIValue()
+    return CatModule(dim)
+
+
 # def constructlist_python(node, speedup):
 #     class ListModule(torch.nn.Module):
 #         def forward(self, *args):
@@ -229,6 +244,7 @@ trans_from_jit_to_python = {
     'aten::softmax': softmax_python,
     'aten::contiguous': contiguous_python,
     'aten::gelu': gelu_python,
+    'aten::cat': cat_python
 }
 
 
