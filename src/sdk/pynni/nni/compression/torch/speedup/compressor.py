@@ -178,6 +178,7 @@ class ModelSpeedup:
                 # is None.
                 continue
             # TODO why detach??
+            # TODO what if a list/tuple of tensor
             dummy_input.append(self.internal_result[_input].detach())
             debugnames.append(_input)
             # v_node = self.debugname_to_value[_input]
@@ -274,9 +275,18 @@ class ModelSpeedup:
             # self.auto_inferences[unique_name].update()
             _logger.info(
                 'Update the indirect sparsity for the %s', unique_name)
-            self.auto_inferences[unique_name].update_indirect_sparsity()
-
-        
+            auto_infer = self.auto_inferences[unique_name]
+            auto_infer.update_indirect_sparsity()
+            # pass the gradient to the predecessor nodes
+            for in_id, tin in enumerate(auto_infer.dummy_input):
+                debug_name = auto_infer.input_debugname[in_id]
+                last_output = self.internal_result[debug_name]
+                # if isinstance(last_output, torch.Tensor):
+                # TODO what if last output is tuple/list of tensor
+                if last_output.grad is not None:
+                    last_output.grad.data += tin.grad.data
+                else:
+                    last_output.grad = tin.grad
 
     def _vnode_to_value(self, c_node):
         """

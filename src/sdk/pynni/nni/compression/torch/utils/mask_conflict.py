@@ -102,9 +102,11 @@ class GroupMaskConflict(MaskFix):
         """
         group_depen = GroupDependency(self.model, self.dummy_input, self.traced)
         depens = group_depen.dependency
+        min_groups = group_depen.min_groups
         _logger.info(depens)
         for layername in depens:
-            group = depens[layername]
+            group_max = depens[layername]
+            group_min = min_groups[layername]
             if layername not in self.masks:
                 # this layer not pruned
                 continue
@@ -117,24 +119,38 @@ class GroupMaskConflict(MaskFix):
                 # In fine-grained pruning, skip this layer
                 _logger.info('Layers %s using fine-grained pruning', layername)
                 continue
-            assert shape[0] % group == 0
+            assert shape[0] % group_max == 0
             # Find the number of masked filter for each group (mini_masked).
             # Because we have to keep the pruned filter can still
             # be divided into the same number of groups, so we only can
             # prune mini_masked filters for each group.
-            step = shape[0] / group
+            step = shape[0] / group_max
             group_masked = []
-            for i in range(group):
+            for i in range(group_max):
                 _start = step * i
                 _end = step * (i+1)
                 _tmp_list = list(filter(lambda x: _start <= x and x < _end, all_zeros))
                 group_masked.append(_tmp_list)
             mini_masked = min([len(x) for x in group_masked])
+            need_unmask = set()
             for gm in group_masked:
                 for i in range(mini_masked, len(gm)):
                     # To keep the output channel number still being divisible to
                     # groups, we set the masks of following filters to be zero.
                     pos = gm[i]
+                    need_unmask.add(pos)
+            step = shape[0] / group_min
+            for i in range(group_min):
+                _start = step * i
+                _end = step * (i+1)
+                _tmp_list = list(filter(lambda x: _start <= x and x < _end, all_zeros))
+                if len(_tmp_list) == step:
+                    # if the whole group is removed, then we don't have to unmask for
+                    # the filters in this group
+                    for pos in _tmp_list:
+                        if pos in need_unmask:
+                            need_unmask.remove(pos)
+            for pos in need_unmask:
                     self.masks[layername]['weight'][pos] = torch.ones(shape[1:])
                     if hasattr(self.masks[layername], 'bias'):
                         self.masks[layername]['bias'][pos] = 1

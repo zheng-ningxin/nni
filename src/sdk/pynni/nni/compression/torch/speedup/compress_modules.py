@@ -264,11 +264,19 @@ def replace_conv2d(conv, auto_infer):
             # if the whole group are pruned
             continue
         else:
+            print(current_input_index)
+            print(current_output_index)
+            # exit()
             new_inchannel_step = len(current_input_index)
             new_outchannel_step = len(current_output_index)
             break
     tmp_weight = torch.ones(n_remained_out, new_inchannel_step, k_size1, k_size2)
     tmp_weight = tmp_weight.to(conv.weight.device)
+    print(n_remained_out, new_outchannel_step)
+    # print(current_output_index)
+    print(remained_in)
+    print(remained_out)
+    print(conv)
     assert n_remained_in % new_inchannel_step == 0
     assert n_remained_out % new_outchannel_step == 0
     

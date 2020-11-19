@@ -42,6 +42,9 @@ class AutoMaskInference:
 
         # Initialize the mask for output tensors
         self.output = self.module(*dummy_input)
+        print(self.output.grad_fn)
+        # exit()
+        # self.output.requires_grad_()
         if output_mask is not None:
             # assume the given output mask is right
             self.output_mask = output_mask
@@ -269,14 +272,23 @@ class AutoMaskInference:
         """
         Find those hidden sparsity through gradient.
         """
+        # if self.name == 'conv1':
+            # print(self.output)
+            # print(type(self.output))
+            # print(self.output.grad)
+            # exit()
         # Each node only update the output mask when we backwards
         # update the output mask
-        if isinstance(self.output, torch.Tensor) and self.output.grad:
+        if isinstance(self.output, torch.Tensor) and self.output.grad is not None:
             # if output have gradient which means this node has successor
             # nodes and the successor nodes have already update their indirect
             # sparsity
             # we can mask the values whose gradient is always zeros
             gradient_sum = torch.sum(torch.abs(self.output.grad.data), dim=0)
+            # if self.name == 'conv1':
+            #     print('Gradient Sum')
+            #     print(gradient_sum)
+                # exit()
             _grad_zero = gradient_sum == 0
             for batchid in range(self.output.size(0)):
                 # set the same mask value for the whole batche
@@ -332,7 +344,11 @@ class AutoMaskInference:
             # print(self.weights[para_name].grad)
             grad_zero = self.weights[para_name].grad.data == 0
             self.weight_mask[para_name][grad_zero] = 0
-
+        # print(self.name)
+        # for tin in self.dummy_input:
+        #     print(tin.requires_grad)
+        #     print(tin.grad)
+        # exit()
         # print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
 
     def update_direct_sparsity(self):
