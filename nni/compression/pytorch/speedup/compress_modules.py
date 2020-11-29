@@ -168,7 +168,10 @@ def replace_conv2d(conv, mask):
                 filter(lambda x: start <= x and x < end, in_channels_index.tolist()))
             if not current_input_index:
                 # there is no kept channel in current group
-                continue
+                # TODO bug here, the groups is directly get from conv.groups, if the whole group is removed,
+                # then the number of groups in the new_conv also need to change
+                raise Exception(
+                    " Donnot support removing the whole group filter except in the depth-wise conv temporarily")
             # shift the global index into the group index
             current_input_index = [x-start for x in current_input_index]
             # if the groups is larger than 1, the input channels of each
@@ -196,7 +199,7 @@ def replace_convtranspose2d(convtrans, mask):
     We need a anthor replace function for
     convtranspose2d, because the layout of
     the weight is different from traditional
-    conv layers.
+    conv layers. The layout of the weight is [N_in, N_out, ksize_1, ksize_2]
 
     Parameters
     ----------
@@ -225,6 +228,8 @@ def replace_convtranspose2d(convtrans, mask):
     groups = convtrans.groups
     # check if can remove the whole group of filters
     if convtrans.in_channels == convtrans.out_channels == convtrans.groups:
+        # remove groups for depthwise layers
+        # this needs the group dependency to be fixed before the speedup
         assert in_channels == out_channels
         groups = in_channels
     _logger.debug('Replace convtranspose2d %s with in_channels:%d out_channels:%d',
@@ -246,20 +251,36 @@ def replace_convtranspose2d(convtrans, mask):
             convtrans.weight.data, 0, in_channels_index)
     else:
         tmp_weight_data = convtrans.weight.data
-    # the group dependency of the out_channels if already take
-    # care of by the convtranspose2d it self
-    if mask.output_mask is not None:
-        ochannel_per_group = convtrans.weight.data.size(1)
-        _index = torch.nonzero(
-            mask.output_mask < ochannel_per_group, as_tuple=True)[0]
-        weight_index = torch.index_select(mask.output_mask, 0, _index)
-        new_convtrans.weight.data.copy_(
-            torch.index_select(tmp_weight_data, 1, weight_index))
-        if convtrans.bias is not None:
-            new_convtrans.bias.data.copy_(
-                torch.index_select(convtrans, 0, mask.output_mask))
+    # we need to handle the output channel group by group like the conv layer
+    out_step = int(convtrans.out_channels) / convtrans.groups
+    out_channel_group = int(out_channels/groups)
+    new_in_per_group = int(in_channels/groups)
+
+    if mask.output_mask is not None and not(in_channels == out_channels == groups):
+        for groupid in range(convtrans.groups):
+            start = groupid * out_step
+            end = (groupid + 1) * out_step
+            current_output_index = list(
+                filter(lambda x: start <= x and x < end, out_channels_index.tolist()))
+            # we need to shift the index into the group-wise
+            current_output_index = [x-start for x in current_output_index]
+            if not current_output_index:
+                # No kept channel in the current group
+                raise Exception(
+                    " Donnot support removing the whole group filter except in the depth-wise conv temporarily")
+            assert len(current_output_index) == out_channel_group, \
+                'Output channel of each group should be the same after pruning'
+            current_output_index = torch.tensor(
+                current_output_index).to(tmp_weight_data.device)
+            new_start = groupid * new_in_per_group
+            new_end = (groupid + 1) * new_in_per_group
+            new_convtrans.weight.data[new_start:new_end] = torch.index_select(
+                tmp_weight_data[start:end], 1, current_output_index)
     else:
-        # don't prune the output channel of convtranspose2d
         new_convtrans.weight.data.copy_(tmp_weight_data)
-        if convtrans.bias is not None:
+    if convtrans.bias is not None:
+        if mask.output_mask is not None:
+            new_convtrans.bias.data[:] = torch.index_select(
+                convtrans.bias.data, 0, out_channels_index)
+        else:
             new_convtrans.bias.data.copy_(convtrans.bias.data)
