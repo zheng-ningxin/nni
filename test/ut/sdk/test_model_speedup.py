@@ -241,7 +241,7 @@ class SpeedupTestCase(TestCase):
     def test_convtranspose_model(self):
         model = TransposeModel()
         dummy_input = torch.rand(1, 3, 8, 8)
-        config_list = [{'sparsity':0.5, op_types:['Conv2d']}]
+        config_list = [{'sparsity':0.5, 'op_types':['Conv2d']}]
         pruner = L1FilterPruner(model, config_list)
         pruner.compress()
         model(dummy_input)
