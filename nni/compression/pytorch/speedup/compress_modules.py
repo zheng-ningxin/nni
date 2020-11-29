@@ -284,3 +284,4 @@ def replace_convtranspose2d(convtrans, mask):
                 convtrans.bias.data, 0, out_channels_index)
         else:
             new_convtrans.bias.data.copy_(convtrans.bias.data)
+    return new_convtrans
