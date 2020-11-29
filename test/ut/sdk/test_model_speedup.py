@@ -75,6 +75,27 @@ class BigModel(torch.nn.Module):
         x = self.fc3(x)
         return x
 
+class TransposeModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 20, 5)
+        self.conv2 = nn.ConvTranspose2d(20, 50, 5)
+        self.bn1 = nn.BatchNorm2d(self.conv1.out_channels)
+        self.bn2 = nn.BatchNorm2d(self.conv2.out_channels)
+        self.fc1 = nn.Linear(8 * 8 * 50, 500)
+        self.fc2 = nn.Linear(500, 10)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.max_pool2d(x, 2, 2)
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.max_pool2d(x, 2, 2)
+        x = x.view(x.size(0), -1)
+        
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
 dummy_input = torch.randn(2, 1, 28, 28)
 SPARSITY = 0.5
 MODEL_FILE, MASK_FILE = './11_model.pth', './l1_mask.pth'
@@ -216,6 +237,19 @@ class SpeedupTestCase(TestCase):
         assert model.backbone2.conv2.in_channels == int(orig_model.backbone2.conv2.in_channels * SPARSITY)
         assert model.backbone2.conv2.out_channels == int(orig_model.backbone2.conv2.out_channels * SPARSITY)
         assert model.backbone2.fc1.in_features == int(orig_model.backbone2.fc1.in_features * SPARSITY)
+
+    def test_convtranspose_model(self):
+        model = TransposeModel()
+        dummy_input = torch.rand(1, 3, 8, 8)
+        config_list = [{'sparsity':0.5, op_types:['Conv2d']}]
+        pruner = L1FilterPruner(model, config_list)
+        pruner.compress()
+        model(dummy_input)
+        pruner.export_model(MODEL_FILE, MASK_FILE)
+        pruner._unwrap_model()
+        ms = ModelSpeedup(model, data, MASK_FILE)
+        ms.speedup_model()
+        model(dummy_input)
 
     # FIXME: This test case might fail randomly, no idea why
     # Example: https://msrasrg.visualstudio.com/NNIOpenSource/_build/results?buildId=16282
