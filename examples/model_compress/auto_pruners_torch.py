@@ -18,12 +18,15 @@ from models.cifar10.mobilenetv2 import MobileNetV2
 from models.cifar10.resnet import ResNet18, ResNet50
 import nni
 from nni.compression.torch import L1FilterPruner, L2FilterPruner, FPGMPruner
-from nni.compression.torch import Constrained_L1FilterPruner, Constrained_L2FilterPruner
-from nni.compression.torch import AttentionActivationPruner
+
+
 from nni.compression.torch import ModelSpeedup
 from nni.compression.torch.utils.counter import count_flops_params
 from nni.compression.torch.utils.shape_dependency import ChannelDependency
+import random
 
+torch.manual_seed(2020)
+random.seed(2020)
 
 def get_data(dataset, data_dir, batch_size, test_batch_size):
     '''
