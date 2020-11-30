@@ -535,12 +535,12 @@ if __name__ == '__main__':
 
     # replace the 
     class tmp_l1_constrained(L1FilterPruner):
-        def __init__(self, model, config_list, dummy_input=dummy_input, optimizer=None):
-            super(tmp_l1_constrained, self).__init__(model, config_list, dummy_input, optimizer, dependency_aware=True)
+        def __init__(self, model, config_list, optimizer=None, dummy_input=dummy_input):
+            super(tmp_l1_constrained, self).__init__(model, config_list, optimizer, dependency_aware=True, dummy_input=dummy_input)
 
     class tmp_l2_constrained(L2FilterPruner):
-        def __init__(self, model, config_list, dummy_input=dummy_input, optimizer=None):
-            super(tmp_l2_constrained, self).__init__(model, config_list, dummy_input, optimizer, dependency_aware=True)
+        def __init__(self, model, config_list, optimizer=None, dummy_input=dummy_input):
+            super(tmp_l2_constrained, self).__init__(model, config_list, optimizer, dependency_aware=True, dummy_input=dummy_input)
 
     from nni.compression.torch.pruning.constants_pruner import PRUNER_DICT
     if args.constrained:
