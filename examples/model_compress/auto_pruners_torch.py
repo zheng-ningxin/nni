@@ -287,7 +287,7 @@ def main(args):
 
     def evaluator(model):
         return test(model, device, criterion, val_loader)
-
+    dummy_input = get_dummy_input(args, device)
     # used to save the performance of the original & pruned & finetuned models
     result = {'flops': {}, 'params': {}, 'performance':{}, 'time_mean':{}, 'time_std':{}}
 
@@ -306,7 +306,7 @@ def main(args):
         op_types = ['Conv2d']
     elif args.base_algo == 'level':
         op_types = ['default']
-    dummy_input = get_dummy_input(args, device)
+    
     config_list = [{
         'sparsity': args.sparsity,
         'op_types': op_types
@@ -369,7 +369,7 @@ def main(args):
         pruner = ADMMPruner(model, config_list, trainer=trainer, num_iterations=2, training_epochs=2)
     elif args.pruner == 'SimulatedAnnealingPruner':
         pruner = SimulatedAnnealingPruner(
-            model, config_list, evaluator=evaluator, dummy_input=dummy_input,  base_algo=args.base_algo,
+            model, config_list, evaluator=evaluator,  base_algo=args.base_algo,
             cool_down_rate=args.cool_down_rate, experiment_data_dir=args.experiment_data_dir)
     elif args.pruner == 'AutoCompressPruner':
         pruner = AutoCompressPruner(
