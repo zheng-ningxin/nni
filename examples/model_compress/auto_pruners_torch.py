@@ -34,7 +34,7 @@ def measure_time(model, data, runtimes=1000):
     times = []
     for runtime in range(runtimes):
         start = time.time()
-        model(*data)
+        model(data)
         end = time.time()
         times.append(end-start)
     _drop = int(runtimes * 0.1)
