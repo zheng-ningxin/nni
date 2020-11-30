@@ -24,9 +24,23 @@ from nni.compression.torch import ModelSpeedup
 from nni.compression.torch.utils.counter import count_flops_params
 from nni.compression.torch.utils.shape_dependency import ChannelDependency
 import random
+import time
+import numpy as np
 
 torch.manual_seed(2020)
 random.seed(2020)
+
+def measure_time(model, data, runtimes=1000):
+    times = []
+    for runtime in range(runtimes):
+        start = time.time()
+        model(*data)
+        end = time.time()
+        times.append(end-start)
+    _drop = int(runtimes * 0.1)
+    mean = np.mean(times[_drop:-1*_drop])
+    std = np.std(times[_drop:-1*_drop])
+    return mean, std
 
 def get_data(dataset, data_dir, batch_size, test_batch_size):
     '''
@@ -275,12 +289,14 @@ def main(args):
         return test(model, device, criterion, val_loader)
 
     # used to save the performance of the original & pruned & finetuned models
-    result = {'flops': {}, 'params': {}, 'performance':{}}
+    result = {'flops': {}, 'params': {}, 'performance':{}, 'time_mean':{}, 'time_std':{}}
 
     flops, params = count_flops_params(model, get_input_size(args.dataset))
+    ori_time_mean, ori_time_std = measure_time(model, dummy_input)
     result['flops']['original'] = flops
     result['params']['original'] = params
-
+    result['time_mean']['original'] = ori_time_mean
+    result['time_std']['original'] = ori_time_std
     evaluation_result = evaluator(model)
     print('Evaluation result (original model): %s' % evaluation_result)
     result['performance']['original'] = evaluation_result
@@ -321,8 +337,6 @@ def main(args):
         def amc_evaluator(val_loader, model):
             return test(model, device, criterion, val_loader) 
         pruner = AMCPruner(model, config_list, amc_evaluator, val_loader, flops_ratio=args.sparsity)
-    elif args.pruner == 'AttentionPruner':
-        pruner = AttentionActivationPruner(model, config_list, dummy_input, optimizer, evaluator, short_term_fine_tuner)
     elif args.pruner == 'ADMMPruner':
         # users are free to change the config here
         if args.model == 'LeNet':
@@ -407,9 +421,11 @@ def main(args):
             torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_speed_up.pth'))
             print('Speed up model saved to %s', args.experiment_data_dir)
         flops, params = count_flops_params(model, get_input_size(args.dataset))
+        mean_time, std_time = measure_time(model, dummy_input)
         result['flops']['speedup'] = flops
         result['params']['speedup'] = params
-
+        result['time_mean']['speedup'] = mean_time
+        result['time_std']['speedup'] = std_time
     if args.fine_tune:
         if args.dataset == 'mnist':
             optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
