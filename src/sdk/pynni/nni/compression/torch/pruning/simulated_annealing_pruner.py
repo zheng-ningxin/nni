@@ -71,7 +71,7 @@ class SimulatedAnnealingPruner(Pruner):
     """
 
     def __init__(self, model, config_list, evaluator, optimize_mode='maximize', base_algo='l1',
-                 start_temperature=100, stop_temperature=20, cool_down_rate=0.9, perturbation_magnitude=0.35, experiment_data_dir='./'):
+                 start_temperature=100, stop_temperature=20, cool_down_rate=0.9, perturbation_magnitude=0.35, experiment_data_dir='./', dependency_aware=False, dummy_input=None):
         # original model
         self._model_to_prune = copy.deepcopy(model)
         self._base_algo = base_algo
@@ -103,6 +103,8 @@ class SimulatedAnnealingPruner(Pruner):
         self._experiment_data_dir = experiment_data_dir
         if not os.path.exists(self._experiment_data_dir):
             os.makedirs(self._experiment_data_dir)
+        self.dependency_aware = dependency_aware
+        self._dummy_input = dummy_input
 
     def validate_config(self, model, config_list):
         """
@@ -281,7 +283,7 @@ class SimulatedAnnealingPruner(Pruner):
                     "config_list for Pruner generated: %s", config_list)
 
                 # fast evaluation
-                pruner = PRUNER_DICT[self._base_algo](copy.deepcopy(self._model_to_prune), config_list)
+                pruner = PRUNER_DICT[self._base_algo](copy.deepcopy(self._model_to_prune), config_list, dependency_aware=self.dependency_aware, dummy_input=self._dummy_input)
                 model_masked = pruner.compress()
                 evaluation_result = self._evaluator(model_masked)
 

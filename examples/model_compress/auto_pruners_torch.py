@@ -325,11 +325,11 @@ def main(args):
 
 
     if args.pruner == 'L1FilterPruner':
-        pruner = L1FilterPruner(model, config_list)
+        pruner = L1FilterPruner(model, config_list, dependency_aware=args.constrained, dummy_input=dummy_input)
     elif args.pruner == 'L2FilterPruner':
-        pruner = L2FilterPruner(model, config_list)
+        pruner = L2FilterPruner(model, config_list, dependency_aware=args.constrained, dummy_input=dummy_input)
     elif args.pruner == 'FPGMPruner':
-        pruner = FPGMPruner(model, config_list)
+        pruner = FPGMPruner(model, config_list, dependency_aware=args.constrained, dummy_input=dummy_input)
     elif args.pruner == 'NetAdaptPruner':
         pruner = NetAdaptPruner(model, config_list, short_term_fine_tuner=short_term_fine_tuner, evaluator=evaluator,
                                 base_algo=args.base_algo, experiment_data_dir=args.experiment_data_dir)
@@ -370,13 +370,13 @@ def main(args):
     elif args.pruner == 'SimulatedAnnealingPruner':
         pruner = SimulatedAnnealingPruner(
             model, config_list, evaluator=evaluator,  base_algo=args.base_algo,
-            cool_down_rate=args.cool_down_rate, experiment_data_dir=args.experiment_data_dir)
+            cool_down_rate=args.cool_down_rate, experiment_data_dir=args.experiment_data_dir, dependency_aware=args.constrained, dummy_input=dummy_input)
     elif args.pruner == 'AutoCompressPruner':
         pruner = AutoCompressPruner(
             model, config_list, trainer=trainer, evaluator=evaluator, dummy_input=dummy_input,
             num_iterations=3, optimize_mode='maximize', base_algo=args.base_algo,
             cool_down_rate=args.cool_down_rate, admm_num_iterations=30, admm_training_epochs=5,
-            experiment_data_dir=args.experiment_data_dir)
+            experiment_data_dir=args.experiment_data_dir, dependency_aware=args.constrained)
     else:
         raise ValueError(
             "Pruner not supported.")
@@ -534,22 +534,22 @@ if __name__ == '__main__':
     dummy_input = get_dummy_input(args, 'cuda')
 
     # replace the 
-    class tmp_l1_constrained(L1FilterPruner):
-        def __init__(self, model, config_list, optimizer=None, dummy_input=dummy_input):
-            super(tmp_l1_constrained, self).__init__(model, config_list, optimizer, dependency_aware=True, dummy_input=dummy_input)
+    # class tmp_l1_constrained(L1FilterPruner):
+    #     def __init__(self, model, config_list, optimizer=None, dummy_input=dummy_input):
+    #         super(tmp_l1_constrained, self).__init__(model, config_list, optimizer, dependency_aware=True, dummy_input=dummy_input)
 
-    class tmp_l2_constrained(L2FilterPruner):
-        def __init__(self, model, config_list, optimizer=None, dummy_input=dummy_input):
-            super(tmp_l2_constrained, self).__init__(model, config_list, optimizer, dependency_aware=True, dummy_input=dummy_input)
+    # class tmp_l2_constrained(L2FilterPruner):
+    #     def __init__(self, model, config_list, optimizer=None, dummy_input=dummy_input):
+    #         super(tmp_l2_constrained, self).__init__(model, config_list, optimizer, dependency_aware=True, dummy_input=dummy_input)
 
-    from nni.compression.torch.pruning.constants_pruner import PRUNER_DICT
-    if args.constrained:
-        PRUNER_DICT['l1'] = tmp_l1_constrained
-        PRUNER_DICT['l2'] = tmp_l2_constrained
-        setattr(nni.compression.torch, 'L1FilterPruner', tmp_l1_constrained)
-        setattr(nni.compression.torch, 'L2FilterPruner', tmp_l2_constrained)
-        L1FilterPruner = tmp_l1_constrained
-        L2FilterPruner = tmp_l2_constrained
+    # from nni.compression.torch.pruning.constants_pruner import PRUNER_DICT
+    # if args.constrained:
+    #     PRUNER_DICT['l1'] = tmp_l1_constrained
+    #     PRUNER_DICT['l2'] = tmp_l2_constrained
+    #     setattr(nni.compression.torch, 'L1FilterPruner', tmp_l1_constrained)
+    #     setattr(nni.compression.torch, 'L2FilterPruner', tmp_l2_constrained)
+    #     L1FilterPruner = tmp_l1_constrained
+    #     L2FilterPruner = tmp_l2_constrained
     from nni.compression.torch import SimulatedAnnealingPruner, ADMMPruner, NetAdaptPruner, AutoCompressPruner, AMCPruner
 
     main(args)

@@ -271,14 +271,14 @@ class StructuredWeightMasker(WeightMasker):
             _w_idx = wrappers_idx[_pos]
             sparsity = sparsities[_pos]
             name = _w.name
-
             # _tmp_mask = self._normal_calc_mask(
             #     sparsity, _w, _w_idx, channel_masks)
             base_mask, current_weight, num_prune = self._get_current_state(
                 sparsity, _w, _w_idx)
             num_total = current_weight.size(0)
             if num_total < 2 or num_prune < 1:
-                return base_mask
+                masks[name] = base_mask
+                continue
             _tmp_mask = self.get_mask(
                 base_mask, current_weight, num_prune, _w, _w_idx, channel_masks)
 

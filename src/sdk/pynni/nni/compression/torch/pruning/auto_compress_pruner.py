@@ -98,6 +98,8 @@ class AutoCompressPruner(Pruner):
         Penalty parameters for ADMM training.
     experiment_data_dir : string
         PATH to store temporary experiment data.
+    dependency_aware: bool
+        If enable the dependency-aware mode
     """
 
     def __init__(self, model, config_list, trainer, evaluator, dummy_input,
@@ -106,7 +108,7 @@ class AutoCompressPruner(Pruner):
                  start_temperature=100, stop_temperature=20, cool_down_rate=0.9, perturbation_magnitude=0.35,
                  # ADMM related
                  admm_num_iterations=30, admm_training_epochs=5, row=1e-4,
-                 experiment_data_dir='./'):
+                 experiment_data_dir='./', dependency_aware=False):
         # original model
         self._model_to_prune = model
         self._base_algo = base_algo
@@ -134,6 +136,7 @@ class AutoCompressPruner(Pruner):
         self._experiment_data_dir = experiment_data_dir
         if not os.path.exists(self._experiment_data_dir):
             os.makedirs(self._experiment_data_dir)
+        self.dependency_aware = dependency_aware
 
     def validate_config(self, model, config_list):
         """
@@ -195,7 +198,7 @@ class AutoCompressPruner(Pruner):
                 stop_temperature=self._stop_temperature,
                 cool_down_rate=self._cool_down_rate,
                 perturbation_magnitude=self._perturbation_magnitude,
-                experiment_data_dir=self._experiment_data_dir)
+                experiment_data_dir=self._experiment_data_dir, dependency_aware=self.dependency_aware, dummy_input=self._dummy_input)
             config_list = SApruner.compress(return_config_list=True)
             _logger.info("Generated config_list : %s", config_list)
 

@@ -217,6 +217,7 @@ class _StructuredFilterPruner(OneshotPruner):
         # original number of groups of filters.
         groups = [self.group_depen[_w.name] for _w in wrappers]
         sparsities = [_w.config['sparsity'] for _w in wrappers]
+
         masks = self.masker.calc_mask(
             sparsities, wrappers, wrappers_idx, channel_dsets=channel_dsets, groups=groups)
         if masks is not None:
@@ -226,6 +227,7 @@ class _StructuredFilterPruner(OneshotPruner):
             # masks can be calculated successfully.
             for _w in wrappers:
                 _w.if_calculated = True
+
         return masks
 
     def _dependency_update_mask(self):
@@ -253,6 +255,7 @@ class _StructuredFilterPruner(OneshotPruner):
             if masks is not None:
                 for layer in masks:
                     for mask_type in masks[layer]:
+
                         assert hasattr(
                             name2wrapper[layer], mask_type), "there is no attribute '%s' in wrapper on %s" % (mask_type, layer)
                         setattr(name2wrapper[layer], mask_type, masks[layer][mask_type])
