@@ -396,6 +396,34 @@ def main(args):
             os.path.join(args.experiment_data_dir, 'model_masked.pth'), os.path.join(args.experiment_data_dir, 'mask.pth'))
         print('Masked model saved to %s', args.experiment_data_dir)
 
+    if args.fine_tune:
+        if args.dataset == 'mnist':
+            optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
+            scheduler = StepLR(optimizer, step_size=1, gamma=0.7)
+        elif args.model == 'vgg16':
+            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+        elif args.model == 'resnet18':
+            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+        elif args.model == 'resnet50':
+            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+        elif args.model == 'mobilenet_v2':
+            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+        if args.lr_decay == 'multistep':
+            scheduler = MultiStepLR(
+                optimizer, milestones=[int(args.fine_tune_epochs*0.25), int(args.fine_tune_epochs*0.5), int(args.fine_tune_epochs*0.75)], gamma=0.1)
+        elif args.lr_decay == 'cos':
+            scheduler = CosineAnnealingLR(optimizer, T_max=args.fine_tune_epochs)
+        best_acc = 0
+        for epoch in range(args.fine_tune_epochs):
+            acc = evaluator(model)
+            print("acc at the begining", acc)
+            train(args, model, device, train_loader, criterion, optimizer, epoch)
+            scheduler.step()
+            acc = evaluator(model)
+            if acc > best_acc:
+                best_acc = acc
+                torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_fine_tuned.pth'))
+
     # model speed up
     if args.speed_up:
         if args.pruner != 'AutoCompressPruner':
@@ -426,33 +454,7 @@ def main(args):
         result['params']['speedup'] = params
         result['time_mean']['speedup'] = mean_time
         result['time_std']['speedup'] = std_time
-    if args.fine_tune:
-        if args.dataset == 'mnist':
-            optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
-            scheduler = StepLR(optimizer, step_size=1, gamma=0.7)
-        elif args.model == 'vgg16':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        elif args.model == 'resnet18':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        elif args.model == 'resnet50':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        elif args.model == 'mobilenet_v2':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        if args.lr_decay == 'multistep':
-            scheduler = MultiStepLR(
-                optimizer, milestones=[int(args.fine_tune_epochs*0.25), int(args.fine_tune_epochs*0.5), int(args.fine_tune_epochs*0.75)], gamma=0.1)
-        elif args.lr_decay == 'cos':
-            scheduler = CosineAnnealingLR(optimizer, T_max=args.fine_tune_epochs)
-        best_acc = 0
-        for epoch in range(args.fine_tune_epochs):
-            acc = evaluator(model)
-            print("acc at the begining", acc)
-            train(args, model, device, train_loader, criterion, optimizer, epoch)
-            scheduler.step()
-            acc = evaluator(model)
-            if acc > best_acc:
-                best_acc = acc
-                torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_fine_tuned.pth'))
+ 
 
     print('Evaluation result (fine tuned): %s' % best_acc)
     print('Fined tuned model saved to %s', args.experiment_data_dir)
