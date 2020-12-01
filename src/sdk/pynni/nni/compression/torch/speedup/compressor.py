@@ -48,7 +48,7 @@ class ModelSpeedup:
     This class is to speedup the model with provided weight mask
     """
 
-    def __init__(self, model, dummy_input, masks_file, batch_dim=0, confidence=16, enable_compile=False):
+    def __init__(self, model, dummy_input, masks_file, map_location=None, batch_dim=0, confidence=16, enable_compile=False):
         """
         Parameters
         ----------
@@ -66,7 +66,7 @@ class ModelSpeedup:
             actually used as the batchsize of the dummy_input.
         confidence: int
             The number of examples used to infer the mask.
-        compile: bool
+        enable_compile: bool
             If this flag is enabled, we will modify the network architecture to resolve
             the sparsity conflict.
         """
@@ -90,7 +90,8 @@ class ModelSpeedup:
         # load the mask tensor to the same device with the dummy_input
         # self.masks save the mask tensors pruned by the user and the infered
         # masks of the others modules
-        self.masks = torch.load(masks_file, str(self.device))
+        self.masks = torch.load(masks_file, map_location if map_location is not None else str(self.device))
+        
         self.constant = {}
         # self.internal_result save the internal output of the submodules
         self.internal_result = {}
