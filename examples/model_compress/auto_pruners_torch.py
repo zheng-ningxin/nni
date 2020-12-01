@@ -375,7 +375,7 @@ def main(args):
         pruner = AutoCompressPruner(
             model, config_list, trainer=trainer, evaluator=evaluator, dummy_input=dummy_input,
             num_iterations=3, optimize_mode='maximize', base_algo=args.base_algo,
-            cool_down_rate=args.cool_down_rate, admm_num_iterations=30, admm_training_epochs=5,
+            cool_down_rate=args.cool_down_rate, admm_num_iterations=5, admm_training_epochs=5,
             experiment_data_dir=args.experiment_data_dir, dependency_aware=args.constrained)
     else:
         raise ValueError(
@@ -508,7 +508,7 @@ if __name__ == '__main__':
     parser.add_argument('--sparsity', type=float, default=0.1,
                         help='target overall target sparsity')
     # param for SimulatedAnnealingPruner
-    parser.add_argument('--cool-down-rate', type=float, default=0.9,
+    parser.add_argument('--cool-down-rate', type=float, default=0.97,
                         help='cool down rate')
     # param for NetAdaptPruner
     parser.add_argument('--sparsity-per-iteration', type=float, default=0.05,

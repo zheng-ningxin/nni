@@ -87,7 +87,8 @@ class AutoMaskInference:
         """
         with torch.no_grad():
             for tensor in self.dummy_input:
-                if isinstance(tensor, torch.Tensor):
+                if isinstance(tensor, torch.Tensor) and len(tensor.size()) > 0:
+                    # if the tensor is a scalar, then skip this tensor
                     randomize_tensor(tensor, start, end)
             for para in self.weights:
                 randomize_tensor(self.weights[para].data, start, end)

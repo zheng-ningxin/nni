@@ -284,7 +284,7 @@ class ModelSpeedup:
                 last_output = self.internal_result[debug_name]
                 # if isinstance(last_output, torch.Tensor):
                 # TODO what if last output is tuple/list of tensor
-                if last_output.grad is not None:
+                if last_output.grad is not None and tin.grad is not None:
                     last_output.grad.data += tin.grad.data
                 else:
                     last_output.grad = tin.grad
