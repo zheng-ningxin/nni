@@ -491,7 +491,7 @@ if __name__ == '__main__':
                         help='number of epochs to pretrain the model')
     parser.add_argument('--batch-size', type=int, default=64,
                         help='input batch size for training (default: 64)')
-    parser.add_argument('--test-batch-size', type=int, default=64,
+    parser.add_argument('--test-batch-size', type=int, default=128,
                         help='input batch size for testing (default: 64)')
     parser.add_argument('--fine-tune', type=str2bool, default=True,
                         help='whether to fine-tune the pruned model')
