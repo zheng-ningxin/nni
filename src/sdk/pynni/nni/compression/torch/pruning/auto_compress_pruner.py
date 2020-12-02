@@ -225,7 +225,8 @@ class AutoCompressPruner(Pruner):
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
             _logger.info('Speeding up models...')
-            m_speedup = ModelSpeedup(self._model_to_prune, self._dummy_input, masks_file, device)
+            # We cannot fold the bias in the iterative pruning
+            m_speedup = ModelSpeedup(self._model_to_prune, self._dummy_input, masks_file, device, fold_bias=False)
             m_speedup.speedup_model()
 
             evaluation_result = self._evaluator(self._model_to_prune)

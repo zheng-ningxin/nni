@@ -48,7 +48,7 @@ class ModelSpeedup:
     This class is to speedup the model with provided weight mask
     """
 
-    def __init__(self, model, dummy_input, masks_file, map_location=None, batch_dim=0, confidence=16, enable_compile=False):
+    def __init__(self, model, dummy_input, masks_file, map_location=None, batch_dim=0, confidence=16, fold_bias=False, enable_compile=False):
         """
         Parameters
         ----------
@@ -97,6 +97,7 @@ class ModelSpeedup:
         self.internal_result = {}
         # if we enable the compilation of the sparsity, then we will modify the network
         # architecture to resolve the sparsity conflict.
+        self.fold_bias = fold_bias
         self.enable_compile = enable_compile
     
 
@@ -243,6 +244,7 @@ class ModelSpeedup:
                 state_dict=copy.deepcopy(module.state_dict()), batch_dim=self.batch_dim)
         self.auto_inferences[unique_name] = _auto_infer
         _auto_infer.name = node.unique_name
+        _auto_infer.fold_bias = self.fold_bias
         # _auto_infer.update()
         _auto_infer.update_direct_sparsity()
         # also save the input debug names into the auto_infer

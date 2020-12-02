@@ -23,7 +23,7 @@ replace_module = {
     'LayerNorm': lambda module, auto_infer: replace_layernorm(module, auto_infer)
 }
 
-NEED_FOLD_BIAS = True
+# NEED_FOLD_BIAS = True
 
 
 def convert_to_coarse_mask(t_mask, dim):
@@ -84,6 +84,7 @@ def replace_linear(linear, auto_infer):
     torch.nn.Linear
         The new linear module
     """
+    NEED_FOLD_BIAS = auto_infer.fold_bias
     assert isinstance(linear, nn.Linear)
     assert len(auto_infer.in_masks) == 1
     assert isinstance(auto_infer.output_mask, torch.Tensor)
@@ -207,6 +208,7 @@ def replace_conv2d(conv, auto_infer):
     assert isinstance(conv, nn.Conv2d)
     # the conv layer should only have one input tensor
     assert len(auto_infer.in_masks) == 1
+    NEED_FOLD_BIAS = auto_infer.fold_bias
     in_mask = auto_infer.in_masks[0]
     in_constant = auto_infer.in_constants[0]
     output_mask = auto_infer.output_mask
