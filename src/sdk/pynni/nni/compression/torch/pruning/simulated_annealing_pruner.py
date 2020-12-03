@@ -106,8 +106,9 @@ class SimulatedAnnealingPruner(Pruner):
         self.dependency_aware = dependency_aware
         self._dummy_input = dummy_input
         if dependency_aware:
+            self._unwrap_model()
             self.channel_depen = ChannelDependency(model, dummy_input)
-
+            self._wrap_model()
     def validate_config(self, model, config_list):
         """
         Parameters
@@ -167,13 +168,18 @@ class SimulatedAnnealingPruner(Pruner):
                         _min = min(_min, sparsity_map[layer])
                     else:
                         _min = 0
+                print(dset)
+                # print([sparsity_map[x] for x in dset])
+                print('_min:', _min)
+                print('_sum', _sum)
                 for layer in dset:
-                    if _min > 0:
-                        # we can get benefit from pruning
-                        sparsity_map[layer] = _sum/ len(dset)
-                    else:
-                        sparsity_map[layer] = _min
-
+                    # if _min > 0:
+                    #     # we can get benefit from pruning
+                    #     sparsity_map[layer] = _sum/ len(dset)
+                    # else:
+                    #     sparsity_map[layer] = _min
+                    sparsity_map[layer] = _min
+                    print('Dependency-aware reset the sparsity of %s to %f ' % (layer, sparsity_map[layer]))
         # a layer with more weights will have no less pruning rate
         for idx, wrapper in enumerate(self.get_modules_wrapper()):
             # L1Filter Pruner requires to specify op_types
