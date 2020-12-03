@@ -109,6 +109,10 @@ class SimulatedAnnealingPruner(Pruner):
             self._unwrap_model()
             self.channel_depen = ChannelDependency(model, dummy_input)
             self._wrap_model()
+        self.name_2_wrapper = {}
+        for wrapper in self.modules_wrapper:
+            self.name_2_wrapper[wrapper.name] = wrapper
+
     def validate_config(self, model, config_list):
         """
         Parameters
@@ -168,17 +172,20 @@ class SimulatedAnnealingPruner(Pruner):
                         _min = min(_min, sparsity_map[layer])
                     else:
                         _min = 0
-                print(dset)
+                # print(dset)
                 # print([sparsity_map[x] for x in dset])
-                print('_min:', _min)
-                print('_sum', _sum)
+                # print('_min:', _min)
+                # print('_sum', _sum)
                 for layer in dset:
                     # if _min > 0:
                     #     # we can get benefit from pruning
                     #     sparsity_map[layer] = _sum/ len(dset)
                     # else:
                     #     sparsity_map[layer] = _min
-                    sparsity_map[layer] = _min
+                    channel_n = self.name_2_wrapper[layer].module.weight.size(0)
+                    round_channel_n = 8 * int(channel_n * _min / 8)
+                    print('Prune channel after aligned %s:%d' % layer, round_channel_n)
+                    sparsity_map[layer] = round_channel_n / channel_n
                     print('Dependency-aware reset the sparsity of %s to %f ' % (layer, sparsity_map[layer]))
         # a layer with more weights will have no less pruning rate
         for idx, wrapper in enumerate(self.get_modules_wrapper()):
@@ -212,6 +219,7 @@ class SimulatedAnnealingPruner(Pruner):
         '''
         num_weights = []
         for wrapper in self.get_modules_wrapper():
+            print(wrapper.name)
             num_weights.append(wrapper.module.weight.data.numel())
 
         num_weights = sorted(num_weights)
