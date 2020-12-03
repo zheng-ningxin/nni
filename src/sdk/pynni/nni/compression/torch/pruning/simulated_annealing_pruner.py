@@ -15,7 +15,7 @@ from nni.utils import OptimizeMode
 from ..compressor import Pruner
 from ..utils.config_validation import CompressorSchema
 from .constants_pruner import PRUNER_DICT
-
+from ..utils.shape_dependency import ChannelDependency
 
 _logger = logging.getLogger(__name__)
 
@@ -105,6 +105,8 @@ class SimulatedAnnealingPruner(Pruner):
             os.makedirs(self._experiment_data_dir)
         self.dependency_aware = dependency_aware
         self._dummy_input = dummy_input
+        if dependency_aware:
+            self.channel_depen = ChannelDependency(model, dummy_input)
 
     def validate_config(self, model, config_list):
         """
@@ -150,16 +152,37 @@ class SimulatedAnnealingPruner(Pruner):
         sparsities = sorted(sparsities)
         self.modules_wrapper = sorted(
             self.modules_wrapper, key=lambda wrapper: wrapper.module.weight.data.numel())
+        sparsity_map = {}
+        
+        for idx, _ in enumerate(sparsities):
+            sparsity_map[self.modules_wrapper[idx].name] = sparsities[idx]
+        if self.dependency_aware:
+            dsets = self.channel_depen.dependency_sets
+            for dset in dsets:
+                _sum = 0
+                _min = np.inf
+                for layer in dset:
+                    if layer in sparsity_map:
+                        _sum += sparsity_map[layer]
+                        _min = min(_min, sparsity_map[layer])
+                    else:
+                        _min = 0
+                for layer in dset:
+                    if _min > 0:
+                        # we can get benefit from pruning
+                        sparsity_map[layer] = _sum/ len(dset)
+                    else:
+                        sparsity_map[layer] = _min
 
         # a layer with more weights will have no less pruning rate
         for idx, wrapper in enumerate(self.get_modules_wrapper()):
             # L1Filter Pruner requires to specify op_types
             if self._base_algo in ['l1', 'l2']:
                 config_list.append(
-                    {'sparsity': sparsities[idx], 'op_types': ['Conv2d'], 'op_names': [wrapper.name]})
+                    {'sparsity': sparsity_map[wrapper.name], 'op_types': ['Conv2d'], 'op_names': [wrapper.name]})
             elif self._base_algo == 'level':
                 config_list.append(
-                    {'sparsity': sparsities[idx], 'op_names': [wrapper.name]})
+                    {'sparsity': sparsity_map[wrapper.name], 'op_names': [wrapper.name]})
 
         config_list = [val for val in config_list if not math.isclose(val['sparsity'], 0, abs_tol=1e-6)]
 
