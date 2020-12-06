@@ -157,10 +157,7 @@ def get_trained_model_optimizer(args, device, train_loader, val_loader, criterio
         model = LeNet().to(device)
         if args.load_pretrained_model:
             model.load_state_dict(torch.load(args.pretrained_model_dir))
-            optimizer = torch.optim.Adadelta(model.parameters(), lr=1e-4)
-        else:
-            optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
-            scheduler = StepLR(optimizer, step_size=1, gamma=0.7)
+        optimizer = torch.optim.Adadelta(model.parameters(), lr=1e-4)
     elif args.model == 'vgg16':
         if args.dataset == 'cifar10':
             model = VGG(depth=16).to(device)
@@ -168,11 +165,7 @@ def get_trained_model_optimizer(args, device, train_loader, val_loader, criterio
             model = torchvision.models.vgg16(pretrained=True).to(device)
         if args.load_pretrained_model:
             model.load_state_dict(torch.load(args.pretrained_model_dir))
-            optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
-        else:
-            optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
-            scheduler = MultiStepLR(
-                optimizer, milestones=[int(args.pretrain_epochs*0.5), int(args.pretrain_epochs*0.75)], gamma=0.1)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
     elif args.model == 'mobilenet_v2':
         if args.dataset == 'cifar10':
             model = MobileNetV2().to(device)
@@ -180,11 +173,7 @@ def get_trained_model_optimizer(args, device, train_loader, val_loader, criterio
             model = torchvision.models.mobilenet_v2(pretrained=True).to(device)
         if args.load_pretrained_model:
             model.load_state_dict(torch.load(args.pretrained_model_dir))
-            optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
-        else:
-            optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
-            scheduler = MultiStepLR(
-                optimizer, milestones=[int(args.pretrain_epochs*0.5), int(args.pretrain_epochs*0.75)], gamma=0.1)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
     elif args.model == 'resnet18':
         if args.dataset == 'cifar10':
             model = ResNet18().to(device)
@@ -192,11 +181,7 @@ def get_trained_model_optimizer(args, device, train_loader, val_loader, criterio
             model = torchvision.models.resnet18(pretrained=True).to(device)
         if args.load_pretrained_model:
             model.load_state_dict(torch.load(args.pretrained_model_dir))
-            optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
-        else:
-            optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
-            scheduler = MultiStepLR(
-                optimizer, milestones=[int(args.pretrain_epochs*0.5), int(args.pretrain_epochs*0.75)], gamma=0.1)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
     elif args.model == 'resnet50':
         if args.dataset == 'cifar10':
             model = ResNet50().to(device)
@@ -204,35 +189,10 @@ def get_trained_model_optimizer(args, device, train_loader, val_loader, criterio
             model = torchvision.models.resnet50(pretrained=True).to(device)
         if args.load_pretrained_model:
             model.load_state_dict(torch.load(args.pretrained_model_dir))
-            optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
-        else:
-            optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
-            scheduler = MultiStepLR(
-                optimizer, milestones=[int(args.pretrain_epochs*0.5), int(args.pretrain_epochs*0.75)], gamma=0.1)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=5e-4)
     else:
         raise ValueError("model not recognized")
 
-    if not args.load_pretrained_model and args.pretrain_epochs > 0:
-        best_acc = 0
-        best_epoch = 0
-        state_dict = None
-        for epoch in range(args.pretrain_epochs):
-            train(args, model, device, train_loader, criterion, optimizer, epoch)
-            scheduler.step()
-            acc = test(model, device, criterion, val_loader)
-            if acc > best_acc:
-                best_acc = acc
-                best_epoch = epoch
-                state_dict = model.state_dict()
-        if state_dict:
-            model.load_state_dict(state_dict)
-    
-        print('Best acc:', best_acc)
-        print('Best epoch:', best_epoch)
-
-        if args.save_model:
-            torch.save(state_dict, os.path.join(args.experiment_data_dir, 'model_trained.pth'))
-            print('Model trained saved to %s', args.experiment_data_dir)
     acc = test(model, device, criterion, val_loader)
     print('Original Accuracy before the pruning', acc)
     return model, optimizer
@@ -380,10 +340,7 @@ def main(args):
     else:
         raise ValueError(
             "Pruner not supported.")
-    if args.constrained:
-        pruner.constrained = True
-    else:
-        pruner.constrained = False
+
     # Pruner.compress() returns the masked model
     # but for AutoCompressPruner, Pruner.compress() returns directly the pruned model
     model = pruner.compress()
@@ -416,6 +373,8 @@ def main(args):
         if args.parallel:
             # Use multiple GPUs to retrain the model
             model = torch.nn.DataParallel(model)
+            _train_batch_size = torch.cuda.device_count() * args.batch_size
+            train_loader, val_loader, criterion = get_data(args.dataset, args.data_dir, _train_batch_size, args.test_batch_size)
 
         best_acc = 0
         for epoch in range(args.fine_tune_epochs):
@@ -493,8 +452,6 @@ if __name__ == '__main__':
                         help='whether to load pretrained model')
     parser.add_argument('--pretrained-model-dir', type=str, default='./',
                         help='path to pretrained model')
-    parser.add_argument('--pretrain-epochs', type=int, default=100,
-                        help='number of epochs to pretrain the model')
     parser.add_argument('--batch-size', type=int, default=64,
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=128,
