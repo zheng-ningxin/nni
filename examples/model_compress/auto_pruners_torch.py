@@ -413,6 +413,10 @@ def main(args):
                 optimizer, milestones=[int(args.fine_tune_epochs*0.25), int(args.fine_tune_epochs*0.5), int(args.fine_tune_epochs*0.75)], gamma=0.1)
         elif args.lr_decay == 'cos':
             scheduler = CosineAnnealingLR(optimizer, T_max=args.fine_tune_epochs)
+        if args.parallel:
+            # Use multiple GPUs to retrain the model
+            model = torch.nn.DataParallel(model)
+
         best_acc = 0
         for epoch in range(args.fine_tune_epochs):
             acc = evaluator(model)
@@ -423,7 +427,9 @@ def main(args):
             if acc > best_acc:
                 best_acc = acc
                 torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_fine_tuned.pth'))
-
+        if args.parallel:
+            # use the orginal model to measure the inference time
+            model = model.module
     # model speed up
     if args.speed_up:
         if args.pruner != 'AutoCompressPruner':
@@ -528,6 +534,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr_decay', type=str, default='multistep', help='lr_decay type')
     parser.add_argument('--short_term_finetune', type=int, default=20, help='the short term finetune epochs')
     parser.add_argument('--only_no_dependency', default=False, type=str2bool, help='If only prune the layers that have no dependency with others')
+    parser.add_argument('--parallel', default=False, type=str2bool, help='If use multiple gpu to finetune the model')
     args = parser.parse_args()
 
     if not os.path.exists(args.experiment_data_dir):
