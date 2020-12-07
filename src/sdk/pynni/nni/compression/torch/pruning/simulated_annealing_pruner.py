@@ -182,6 +182,8 @@ class SimulatedAnnealingPruner(Pruner):
                     #     sparsity_map[layer] = _sum/ len(dset)
                     # else:
                     #     sparsity_map[layer] = _min
+                    if not layer in self.name_2_wrapper:
+                        continue
                     channel_n = self.name_2_wrapper[layer].module.weight.size(0)
                     round_channel_n = 8 * int(channel_n * _min / 8)
                     print('Prune channel after aligned %s:%d' % (layer, round_channel_n))
