@@ -184,7 +184,7 @@ class SimulatedAnnealingPruner(Pruner):
                     #     sparsity_map[layer] = _min
                     channel_n = self.name_2_wrapper[layer].module.weight.size(0)
                     round_channel_n = 8 * int(channel_n * _min / 8)
-                    print('Prune channel after aligned %s:%d' % layer, round_channel_n)
+                    print('Prune channel after aligned %s:%d' % (layer, round_channel_n))
                     sparsity_map[layer] = round_channel_n / channel_n
                     print('Dependency-aware reset the sparsity of %s to %f ' % (layer, sparsity_map[layer]))
         # a layer with more weights will have no less pruning rate
