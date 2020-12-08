@@ -27,8 +27,10 @@ import random
 import time
 import numpy as np
 
-torch.manual_seed(2020)
-random.seed(2020)
+
+def init_seed(seed):
+    torch.manual_seed(seed)
+    random.seed(seed)
 
 def measure_time(model, data, runtimes=1000):
     times = []
@@ -493,7 +495,10 @@ if __name__ == '__main__':
     parser.add_argument('--only_no_dependency', default=False, type=str2bool, help='If only prune the layers that have no dependency with others')
     parser.add_argument('--parallel', default=False, type=str2bool, help='If use multiple gpu to finetune the model')
     parser.add_argument('--aligned', default=8, type=int, help='The number of the pruned filter should be aligned with')
+    parser.add_argument('--seed', default=2020, type=int, help='The random seed for torch and random module.')
     args = parser.parse_args()
+    # random init the seed
+    init_seed(args.seed)
 
     if not os.path.exists(args.experiment_data_dir):
         os.makedirs(args.experiment_data_dir)
