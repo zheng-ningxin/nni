@@ -71,7 +71,7 @@ class SimulatedAnnealingPruner(Pruner):
     """
 
     def __init__(self, model, config_list, evaluator, optimize_mode='maximize', base_algo='l1',
-                 start_temperature=100, stop_temperature=20, cool_down_rate=0.9, perturbation_magnitude=0.35, experiment_data_dir='./', dependency_aware=False, dummy_input=None):
+                 start_temperature=100, stop_temperature=20, cool_down_rate=0.9, perturbation_magnitude=0.35, experiment_data_dir='./', dependency_aware=False, dummy_input=None, aligned=1):
         # original model
         self._model_to_prune = copy.deepcopy(model)
         self._base_algo = base_algo
@@ -112,6 +112,7 @@ class SimulatedAnnealingPruner(Pruner):
         self.name_2_wrapper = {}
         for wrapper in self.modules_wrapper:
             self.name_2_wrapper[wrapper.name] = wrapper
+        self.aligned = aligned
 
     def validate_config(self, model, config_list):
         """
@@ -185,7 +186,7 @@ class SimulatedAnnealingPruner(Pruner):
                     if not layer in self.name_2_wrapper:
                         continue
                     channel_n = self.name_2_wrapper[layer].module.weight.size(0)
-                    round_channel_n = 8 * int(channel_n * _min / 8)
+                    round_channel_n = self.aligned * int(channel_n * _min / self.aligned)
                     print('Prune channel after aligned %s:%d' % (layer, round_channel_n))
                     sparsity_map[layer] = round_channel_n / channel_n
                     print('Dependency-aware reset the sparsity of %s to %f ' % (layer, sparsity_map[layer]))

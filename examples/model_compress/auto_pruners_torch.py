@@ -330,7 +330,7 @@ def main(args):
     elif args.pruner == 'SimulatedAnnealingPruner':
         pruner = SimulatedAnnealingPruner(
             model, config_list, evaluator=evaluator,  base_algo=args.base_algo,
-            cool_down_rate=args.cool_down_rate, experiment_data_dir=args.experiment_data_dir, dependency_aware=args.constrained, dummy_input=dummy_input)
+            cool_down_rate=args.cool_down_rate, experiment_data_dir=args.experiment_data_dir, dependency_aware=args.constrained, dummy_input=dummy_input, aligned=args.aligned)
     elif args.pruner == 'AutoCompressPruner':
         pruner = AutoCompressPruner(
             model, config_list, trainer=trainer, evaluator=evaluator, dummy_input=dummy_input,
@@ -492,6 +492,7 @@ if __name__ == '__main__':
     parser.add_argument('--short_term_finetune', type=int, default=20, help='the short term finetune epochs')
     parser.add_argument('--only_no_dependency', default=False, type=str2bool, help='If only prune the layers that have no dependency with others')
     parser.add_argument('--parallel', default=False, type=str2bool, help='If use multiple gpu to finetune the model')
+    parser.add_argument('--aligned', default=8, type=int, help='The number of the pruned filter should be aligned with')
     args = parser.parse_args()
 
     if not os.path.exists(args.experiment_data_dir):
