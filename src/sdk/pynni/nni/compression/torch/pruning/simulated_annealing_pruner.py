@@ -321,9 +321,12 @@ class SimulatedAnnealingPruner(Pruner):
                     sparsities_perturbated)
                 _logger.info(
                     "config_list for Pruner generated: %s", config_list)
-
+                kwargs = {}
+                if self._base_algo in ['l1', 'l2']:
+                    # only structured pruning have the dependency-aware mode
+                    kwargs = {'dummy_input': self._dummy_input, 'dependency_aware':self.dependency_aware}
                 # fast evaluation
-                pruner = PRUNER_DICT[self._base_algo](copy.deepcopy(self._model_to_prune), config_list, dependency_aware=self.dependency_aware, dummy_input=self._dummy_input)
+                pruner = PRUNER_DICT[self._base_algo](copy.deepcopy(self._model_to_prune), config_list, **kwargs)
                 model_masked = pruner.compress()
                 evaluation_result = self._evaluator(model_masked)
 
