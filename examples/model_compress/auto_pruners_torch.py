@@ -355,6 +355,38 @@ def main(args):
             os.path.join(args.experiment_data_dir, 'model_masked.pth'), os.path.join(args.experiment_data_dir, 'mask.pth'))
         print('Masked model saved to %s', args.experiment_data_dir)
 
+    # model speed up
+    if args.speed_up:
+        if args.pruner != 'AutoCompressPruner':
+            if args.model == 'LeNet':
+                model = LeNet().to(device)
+            elif args.model == 'vgg16':
+                model = VGG(depth=16).to(device)
+            elif args.model == 'resnet18':
+                model = ResNet18().to(device)
+            elif args.model == 'resnet50':
+                model = ResNet50().to(device)
+            elif args.model == 'mobilenet_v2':
+                model = MobileNetV2().to(device)
+            model.load_state_dict(torch.load(os.path.join(args.experiment_data_dir, 'model_masked.pth')))
+            masks_file = os.path.join(args.experiment_data_dir, 'mask.pth')
+
+            m_speedup = ModelSpeedup(model, dummy_input, masks_file, device)
+            m_speedup.speedup_model()
+            evaluation_result = evaluator(model)
+            print('Evaluation result (speed up model): %s' % evaluation_result)
+            result['performance']['speedup'] = evaluation_result
+
+            torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_speed_up.pth'))
+            print('Speed up model saved to %s', args.experiment_data_dir)
+        flops, params = count_flops_params(model, get_input_size(args.dataset))
+        mean_time, std_time = measure_time(model, dummy_input)
+        result['flops']['speedup'] = flops
+        result['params']['speedup'] = params
+        result['time_mean']['speedup'] = mean_time
+        result['time_std']['speedup'] = std_time
+ 
+
     if args.fine_tune:
         if args.dataset == 'mnist':
             optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
@@ -391,37 +423,7 @@ def main(args):
         if args.parallel:
             # use the orginal model to measure the inference time
             model = model.module
-    # model speed up
-    if args.speed_up:
-        if args.pruner != 'AutoCompressPruner':
-            if args.model == 'LeNet':
-                model = LeNet().to(device)
-            elif args.model == 'vgg16':
-                model = VGG(depth=16).to(device)
-            elif args.model == 'resnet18':
-                model = ResNet18().to(device)
-            elif args.model == 'resnet50':
-                model = ResNet50().to(device)
-            elif args.model == 'mobilenet_v2':
-                model = MobileNetV2().to(device)
-            model.load_state_dict(torch.load(os.path.join(args.experiment_data_dir, 'model_masked.pth')))
-            masks_file = os.path.join(args.experiment_data_dir, 'mask.pth')
 
-            m_speedup = ModelSpeedup(model, dummy_input, masks_file, device)
-            m_speedup.speedup_model()
-            evaluation_result = evaluator(model)
-            print('Evaluation result (speed up model): %s' % evaluation_result)
-            result['performance']['speedup'] = evaluation_result
-
-            torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_speed_up.pth'))
-            print('Speed up model saved to %s', args.experiment_data_dir)
-        flops, params = count_flops_params(model, get_input_size(args.dataset))
-        mean_time, std_time = measure_time(model, dummy_input)
-        result['flops']['speedup'] = flops
-        result['params']['speedup'] = params
-        result['time_mean']['speedup'] = mean_time
-        result['time_std']['speedup'] = std_time
- 
 
     print('Evaluation result (fine tuned): %s' % best_acc)
     print('Fined tuned model saved to %s', args.experiment_data_dir)
