@@ -355,79 +355,159 @@ def main(args):
             os.path.join(args.experiment_data_dir, 'model_masked.pth'), os.path.join(args.experiment_data_dir, 'mask.pth'))
         print('Masked model saved to %s', args.experiment_data_dir)
 
-    # model speed up
-    if args.speed_up:
-        if args.pruner != 'AutoCompressPruner':
-            if args.model == 'LeNet':
-                model = LeNet().to(device)
+    if args.constrained:
+        # model speedup
+        if args.speed_up:
+            if args.pruner != 'AutoCompressPruner':
+                if args.model == 'LeNet':
+                    model = LeNet().to(device)
+                elif args.model == 'vgg16':
+                    model = VGG(depth=16).to(device)
+                elif args.model == 'resnet18':
+                    model = ResNet18().to(device)
+                elif args.model == 'resnet50':
+                    model = ResNet50().to(device)
+                elif args.model == 'mobilenet_v2':
+                    model = MobileNetV2().to(device)
+                model.load_state_dict(torch.load(os.path.join(args.experiment_data_dir, 'model_masked.pth')))
+                masks_file = os.path.join(args.experiment_data_dir, 'mask.pth')
+
+                m_speedup = ModelSpeedup(model, dummy_input, masks_file, device)
+                m_speedup.speedup_model()
+                evaluation_result = evaluator(model)
+                print('Evaluation result (speed up model): %s' % evaluation_result)
+                result['performance']['speedup'] = evaluation_result
+
+                torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_speed_up.pth'))
+                print('Speed up model saved to %s', args.experiment_data_dir)
+            flops, params = count_flops_params(model, get_input_size(args.dataset))
+            mean_time, std_time = measure_time(model, dummy_input)
+            result['flops']['speedup'] = flops
+            result['params']['speedup'] = params
+            result['time_mean']['speedup'] = mean_time
+            result['time_std']['speedup'] = std_time
+    
+
+        if args.fine_tune:
+            if args.dataset == 'mnist':
+                optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
+                scheduler = StepLR(optimizer, step_size=1, gamma=0.7)
             elif args.model == 'vgg16':
-                model = VGG(depth=16).to(device)
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
             elif args.model == 'resnet18':
-                model = ResNet18().to(device)
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
             elif args.model == 'resnet50':
-                model = ResNet50().to(device)
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
             elif args.model == 'mobilenet_v2':
-                model = MobileNetV2().to(device)
-            model.load_state_dict(torch.load(os.path.join(args.experiment_data_dir, 'model_masked.pth')))
-            masks_file = os.path.join(args.experiment_data_dir, 'mask.pth')
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+            if args.lr_decay == 'multistep':
+                scheduler = MultiStepLR(
+                    optimizer, milestones=[int(args.fine_tune_epochs*0.25), int(args.fine_tune_epochs*0.5), int(args.fine_tune_epochs*0.75)], gamma=0.1)
+            elif args.lr_decay == 'cos':
+                scheduler = CosineAnnealingLR(optimizer, T_max=args.fine_tune_epochs)
+            if args.parallel:
+                # Use multiple GPUs to retrain the model
+                model = torch.nn.DataParallel(model)
+                _train_batch_size = torch.cuda.device_count() * args.batch_size
+                train_loader, val_loader, criterion = get_data(args.dataset, args.data_dir, _train_batch_size, args.test_batch_size)
 
-            m_speedup = ModelSpeedup(model, dummy_input, masks_file, device)
-            m_speedup.speedup_model()
-            evaluation_result = evaluator(model)
-            print('Evaluation result (speed up model): %s' % evaluation_result)
-            result['performance']['speedup'] = evaluation_result
-
-            torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_speed_up.pth'))
-            print('Speed up model saved to %s', args.experiment_data_dir)
-        flops, params = count_flops_params(model, get_input_size(args.dataset))
-        mean_time, std_time = measure_time(model, dummy_input)
-        result['flops']['speedup'] = flops
-        result['params']['speedup'] = params
-        result['time_mean']['speedup'] = mean_time
-        result['time_std']['speedup'] = std_time
- 
-
-    if args.fine_tune:
-        if args.dataset == 'mnist':
-            optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
-            scheduler = StepLR(optimizer, step_size=1, gamma=0.7)
-        elif args.model == 'vgg16':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        elif args.model == 'resnet18':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        elif args.model == 'resnet50':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        elif args.model == 'mobilenet_v2':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-        if args.lr_decay == 'multistep':
-            scheduler = MultiStepLR(
-                optimizer, milestones=[int(args.fine_tune_epochs*0.25), int(args.fine_tune_epochs*0.5), int(args.fine_tune_epochs*0.75)], gamma=0.1)
-        elif args.lr_decay == 'cos':
-            scheduler = CosineAnnealingLR(optimizer, T_max=args.fine_tune_epochs)
-        if args.parallel:
-            # Use multiple GPUs to retrain the model
-            model = torch.nn.DataParallel(model)
-            _train_batch_size = torch.cuda.device_count() * args.batch_size
-            train_loader, val_loader, criterion = get_data(args.dataset, args.data_dir, _train_batch_size, args.test_batch_size)
-
-        best_acc = 0
-        for epoch in range(args.fine_tune_epochs):
-            acc = evaluator(model)
-            print("acc at the begining", acc)
-            train(args, model, device, train_loader, criterion, optimizer, epoch)
-            scheduler.step()
-            acc = evaluator(model)
-            if acc > best_acc:
-                best_acc = acc
-                torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_fine_tuned.pth'))
-        if args.parallel:
-            # use the orginal model to measure the inference time
-            model = model.module
+            best_acc = 0
+            for epoch in range(args.fine_tune_epochs):
+                acc = evaluator(model)
+                print("acc at the begining", acc)
+                train(args, model, device, train_loader, criterion, optimizer, epoch)
+                scheduler.step()
+                acc = evaluator(model)
+                if acc > best_acc:
+                    best_acc = acc
+                    torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_fine_tuned.pth'))
+            if args.parallel:
+                # use the orginal model to measure the inference time
+                model = model.module
 
 
-    print('Evaluation result (fine tuned): %s' % best_acc)
-    print('Fined tuned model saved to %s', args.experiment_data_dir)
-    result['performance']['finetuned'] = best_acc
+        print('Evaluation result (fine tuned): %s' % best_acc)
+        print('Fined tuned model saved to %s', args.experiment_data_dir)
+        result['performance']['finetuned'] = best_acc
+    else:
+        # if not constrained, then first finetune then speedup, we use the finetuned accuracy as the final accuracy
+
+        if args.fine_tune:
+            if args.dataset == 'mnist':
+                optimizer = torch.optim.Adadelta(model.parameters(), lr=1)
+                scheduler = StepLR(optimizer, step_size=1, gamma=0.7)
+            elif args.model == 'vgg16':
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+            elif args.model == 'resnet18':
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+            elif args.model == 'resnet50':
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+            elif args.model == 'mobilenet_v2':
+                optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+            if args.lr_decay == 'multistep':
+                scheduler = MultiStepLR(
+                    optimizer, milestones=[int(args.fine_tune_epochs*0.25), int(args.fine_tune_epochs*0.5), int(args.fine_tune_epochs*0.75)], gamma=0.1)
+            elif args.lr_decay == 'cos':
+                scheduler = CosineAnnealingLR(optimizer, T_max=args.fine_tune_epochs)
+            if args.parallel:
+                # Use multiple GPUs to retrain the model
+                model = torch.nn.DataParallel(model)
+                _train_batch_size = torch.cuda.device_count() * args.batch_size
+                train_loader, val_loader, criterion = get_data(args.dataset, args.data_dir, _train_batch_size, args.test_batch_size)
+
+            best_acc = 0
+            for epoch in range(args.fine_tune_epochs):
+                acc = evaluator(model)
+                print("acc at the begining", acc)
+                train(args, model, device, train_loader, criterion, optimizer, epoch)
+                scheduler.step()
+                acc = evaluator(model)
+                if acc > best_acc:
+                    best_acc = acc
+                    torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_fine_tuned.pth'))
+            if args.parallel:
+                # use the orginal model to measure the inference time
+                model = model.module
+
+        if args.speed_up:
+            if args.pruner != 'AutoCompressPruner':
+                if args.model == 'LeNet':
+                    model = LeNet().to(device)
+                elif args.model == 'vgg16':
+                    model = VGG(depth=16).to(device)
+                elif args.model == 'resnet18':
+                    model = ResNet18().to(device)
+                elif args.model == 'resnet50':
+                    model = ResNet50().to(device)
+                elif args.model == 'mobilenet_v2':
+                    model = MobileNetV2().to(device)
+                model.load_state_dict(torch.load(os.path.join(args.experiment_data_dir, 'model_masked.pth')))
+                masks_file = os.path.join(args.experiment_data_dir, 'mask.pth')
+
+                m_speedup = ModelSpeedup(model, dummy_input, masks_file, device)
+                m_speedup.speedup_model()
+                evaluation_result = evaluator(model)
+                print('Evaluation result (speed up model): %s' % evaluation_result)
+                result['performance']['speedup'] = evaluation_result
+
+                torch.save(model.state_dict(), os.path.join(args.experiment_data_dir, 'model_speed_up.pth'))
+                print('Speed up model saved to %s', args.experiment_data_dir)
+            flops, params = count_flops_params(model, get_input_size(args.dataset))
+            mean_time, std_time = measure_time(model, dummy_input)
+            result['flops']['speedup'] = flops
+            result['params']['speedup'] = params
+            result['time_mean']['speedup'] = mean_time
+            result['time_std']['speedup'] = std_time
+    
+
+
+        print('Evaluation result (fine tuned): %s' % best_acc)
+        print('Fined tuned model saved to %s', args.experiment_data_dir)
+        result['performance']['finetuned'] = best_acc
+
+
+
+
 
     with open(os.path.join(args.experiment_data_dir, 'result.json'), 'w+') as f:
         json.dump(result, f)
