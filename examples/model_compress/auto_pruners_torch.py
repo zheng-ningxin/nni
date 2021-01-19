@@ -234,7 +234,7 @@ def get_input_size(dataset):
 
 def main(args):
     # prepare dataset
-    torch.manual_seed(0)
+    # torch.manual_seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader, val_loader, criterion = get_data(args.dataset, args.data_dir, args.batch_size, args.test_batch_size)
     model, optimizer = get_trained_model_optimizer(args, device, train_loader, val_loader, criterion)
