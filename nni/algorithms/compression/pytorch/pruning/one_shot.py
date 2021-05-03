@@ -187,7 +187,8 @@ class _StructuredFilterPruner(OneshotPruner):
     def validate_config(self, model, config_list):
         schema = CompressorSchema([{
             Optional('sparsity'): And(float, lambda n: 0 < n < 1),
-            Optional('op_types'): ['Conv2d'],
+            # Conv2dStaticSamePadding is for the Efficientnet
+            Optional('op_types'): ['Conv2d', 'Conv2dStaticSamePadding'],
             Optional('op_names'): [str],
             Optional('exclude'): bool
         }], model, logger)

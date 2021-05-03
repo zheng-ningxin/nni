@@ -19,27 +19,27 @@ _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
 
 
-def get_module_by_name(model, module_name):
-    """
-    Get a module specified by its module name
+# def get_module_by_name(model, module_name):
+#     """
+#     Get a module specified by its module name
 
-    Parameters
-    ----------
-    model : pytorch model
-        the pytorch model from which to get its module
-    module_name : str
-        the name of the required module
+#     Parameters
+#     ----------
+#     model : pytorch model
+#         the pytorch model from which to get its module
+#     module_name : str
+#         the name of the required module
 
-    Returns
-    -------
-    module, module
-        the parent module of the required module, the required module
-    """
-    name_list = module_name.split(".")
-    for name in name_list[:-1]:
-        model = getattr(model, name)
-    leaf_module = getattr(model, name_list[-1])
-    return model, leaf_module
+#     Returns
+#     -------
+#     module, module
+#         the parent module of the required module, the required module
+#     """
+#     name_list = module_name.split(".")
+#     for name in name_list[:-1]:
+#         model = getattr(model, name)
+#     leaf_module = getattr(model, name_list[-1])
+#     return model, leaf_module
 
 
 class ModelSpeedup:
@@ -79,6 +79,7 @@ class ModelSpeedup:
         self.batch_dim = batch_dim
         self._random_model_input(dummy_input, confidence, batch_dim)
         self.torch_graph = build_module_graph(model, self.dummy_input)
+        # import pdb; pdb.set_trace()
         # dict object to save the auto inferences objects of the submodules
         self.auto_inferences = {}
         # the index dict to find the corresponding torch._C.Value object
@@ -344,6 +345,7 @@ class ModelSpeedup:
         in_degree = {}
         out_degree = {}
         visit_queue = queue.Queue()
+        # import pdb; pdb.set_trace()
         for node in self.torch_graph.nodes_py.nodes_op:
             successors = self.torch_graph.find_successors(node.unique_name)
             out_degree[node.unique_name] = len(successors)

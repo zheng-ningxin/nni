@@ -77,6 +77,8 @@ def mean_python(node, speedup):
 def add_python(node, speedup):
     return torch.add
 
+def mul_python(node, speedup):
+    return torch.mul
 
 def slice_python(node, speedup):
     class SliceMoudle(torch.nn.Module):
@@ -242,7 +244,9 @@ trans_from_jit_to_python = {
     # 'aten::cat': cat_python,
     'aten::add': add_python,
     'aten::add_': add_python,
+    'aten::mul': mul_python,
     'aten::relu': relu_python,
+    'aten::sigmoid': relu_python,
     # 'aten::tanh': tanh_python,
     # 'aten::tanh_': tanh_python,
     'aten::flatten': flatten_python,

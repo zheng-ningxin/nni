@@ -42,9 +42,10 @@ def fix_mask_conflict(masks, model=None, dummy_input=None, traced=None):
         model.train(training)
 
     fix_group_mask = GroupMaskConflict(masks, model, dummy_input, traced)
-    masks = fix_group_mask.fix_mask()
+    # masks = fix_group_mask.fix_mask()
     fix_channel_mask = ChannelMaskConflict(masks, model, dummy_input, traced)
     masks = fix_channel_mask.fix_mask()
+    import pdb; pdb.set_trace()
     return masks
 
 
@@ -121,7 +122,7 @@ class GroupMaskConflict(MaskFix):
                 # In fine-grained pruning, skip this layer
                 _logger.info('Layers %s using fine-grained pruning', layername)
                 continue
-            assert shape[0] % group_max == 0
+            assert shape[0] % group_max == 0, "Layer:%s Out Channels=%d groups=%d" % (layername, shape[0], group_max)
             # Find the number of masked filter for each group (mini_masked).
             # Because we have to keep the pruned filter can still
             # be divided into the same number of groups, so we only can
@@ -189,6 +190,9 @@ class ChannelMaskConflict(MaskFix):
         channel_depen = ChannelDependency(self.model, self.dummy_input, self.traced)
         depen_sets = channel_depen.dependency_sets
         for dset in depen_sets:
+
+            _logger.info( 'Fix mask conflict' + ','.join(dset))
+
             if len(dset) == 1:
                 # This layer has no channel dependency with other layers
                 continue
@@ -244,7 +248,6 @@ class ChannelMaskConflict(MaskFix):
                     mask['weight'][i] = torch.ones(w_shape[1:])
                     if hasattr(mask, 'bias'):
                         mask['bias'][i] = 1
-            _logger.info(','.join(dset))
             _logger.info('Pruned Filters after fixing conflict:')
             pruned_filters = set(list(range(ori_channels)))-channel_remain
             _logger.info(str(sorted(pruned_filters)))

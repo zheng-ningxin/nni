@@ -5,7 +5,7 @@
 import logging
 import queue
 import re
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 import torch
 from torch.utils.tensorboard._pytorch_graph import NodePy, NodePyIO, NodePyOP, GraphPy
 CLASSTYPE_KIND = 'ClassType'
@@ -313,6 +313,10 @@ class TorchModuleGraph(TorchGraph):
             if output.node().kind() == CONSTANT_KIND:
                 continue
             outputs.append(output.debugName())
+        # remove the dumplicated inputs and outputs
+        inputs = list(OrderedDict.fromkeys(inputs))
+        outputs = list(OrderedDict.fromkeys(outputs))
+
         nodepy = NodePyGroup(node_name, unique_name, module_type, op_type,
                              node_group, inputs=inputs, outputs=outputs, key_node=node)
         return nodepy
@@ -350,6 +354,7 @@ class TorchModuleGraph(TorchGraph):
 
         """
         _logger.debug("expand module node, node name: %s", node_name)
+        # import pdb; pdb.set_trace()
         self.global_count += 1
         if not op_type:
             op_type = node.kind()
@@ -397,6 +402,10 @@ class TorchModuleGraph(TorchGraph):
                     # if(len(outputs)>1):
                     #     import pdb; pdb.set_trace()
                 # print(_output)
+
+        # remove the dumplicated inputs and outputs
+        inputs = list(OrderedDict.fromkeys(inputs))
+        outputs = list(OrderedDict.fromkeys(outputs))
 
         nodepy = NodePyGroup(node_name, unique_name, module_type, op_type,
                              node_group, inputs=list(inputs), outputs=list(outputs))
@@ -809,7 +818,7 @@ class TorchModuleGraph(TorchGraph):
             else:
                 node_py = self.output_to_node[_input]
                 predecessors.append(node_py.unique_name)
-        return predecessors
+        return list(OrderedDict.fromkeys(predecessors))
 
     def find_successors(self, unique_name):
         """
@@ -833,4 +842,4 @@ class TorchModuleGraph(TorchGraph):
             nodes_py = self.input_to_node[output]
             for node_py in nodes_py:
                 successors.append(node_py.unique_name)
-        return successors
+        return list(OrderedDict.fromkeys(successors))

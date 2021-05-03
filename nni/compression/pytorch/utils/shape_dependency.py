@@ -119,8 +119,10 @@ class ChannelDependency(Dependency):
         parent_layers = []
         queue = []
         queue.append(node)
+        # import pdb; pdb.set_trace()
         while queue:
             curnode = queue.pop(0)
+            print(curnode.name)
             if curnode.op_type == 'Conv2d' or curnode.op_type == 'Linear' or curnode.op_type == 'ConvTranspose2d':
                 # find the first met conv
                 parent_layers.append(curnode.name)
@@ -132,6 +134,7 @@ class ChannelDependency(Dependency):
             parents = [self.graph.name_to_node[name] for name in parents]
             for parent in parents:
                 queue.append(parent)
+                print('###Add %s -> %s'%(curnode.name, parent.name))
         return parent_layers
 
     def build_dependency(self):
@@ -143,10 +146,11 @@ class ChannelDependency(Dependency):
         # channel dependency
         self.graph.unpack_manually()
         for node in self.graph.nodes_py.nodes_op:
+            print("Build dependency", node.name)
             parent_layers = []
             # find the node that contains aten::add
             # or aten::cat operations
-            if node.op_type in ADD_TYPES:
+            if node.op_type in ADD_TYPES or node.op_type in MUL_TYPES:
                 parent_layers = self._get_parent_layers(node)
             elif node.op_type == CAT_TYPE:
                 # To determine if this cat operation will introduce channel
@@ -410,7 +414,9 @@ class GroupDependency(Dependency):
             key: the name of conv layers, value: the minimum value that the number of
             filters should be divisible to.
         """
+        self.graph.unpack_manually()
         self.groups = {}
+        # import pdb; pdb.set_trace()
         for node in self.graph.nodes_py.nodes_op:
             if node.op_type == 'Conv2d' or node.op_type == 'ConvTranspose2d':
                 group = self._get_conv_groups(node)
@@ -425,8 +431,10 @@ class GroupDependency(Dependency):
                     # of output channels of their parent conv layer to be divisible by group.
                     parent_convs = self._get_parent_convs(node)
                     for parent in parent_convs:
+                        print("####", node.name, group, parent)
                         if parent in self.groups:
                             self.groups[parent].append(group)
+
                         else:
                             self.groups[parent] = [group]
         # self.dependency = {name: np.lcm(self.groups[name]) for name in self.groups}

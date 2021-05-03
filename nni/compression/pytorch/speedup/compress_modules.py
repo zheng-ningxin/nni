@@ -13,6 +13,7 @@ replace_module = {
     'Linear': lambda module, auto_infer: replace_linear(module, auto_infer),
     'MaxPool2d': lambda module, auto_infer: no_replace(module, auto_infer),
     'AvgPool2d': lambda module, auto_infer: no_replace(module, auto_infer),
+    'Sigmoid': lambda module, auto_infer: no_replace(module, auto_infer),
     'AdaptiveAvgPool2d': lambda module, auto_infer: no_replace(module, auto_infer),
     'ReLU': lambda module, auto_infer: no_replace(module, auto_infer),
     'ReLU6': lambda module, auto_infer: no_replace(module, auto_infer),
@@ -20,7 +21,10 @@ replace_module = {
     'Dropout2d': lambda module, auto_infer: no_replace(module, auto_infer),
     'Dropout3d': lambda module, auto_infer: no_replace(module, auto_infer),
     'LayerNorm': lambda module, auto_infer: replace_layernorm(module, auto_infer),
-    'ConvTranspose2d': lambda module, auto_infer: replace_convtranspose2d(module, auto_infer)
+    'ConvTranspose2d': lambda module, auto_infer: replace_convtranspose2d(module, auto_infer),
+    'SwishMe': lambda module, auto_infer: no_replace(module, auto_infer),
+    'Swish': lambda module, auto_infer: no_replace(module, auto_infer),
+    'ZeroPad2d': lambda module, auto_infer: no_replace(module, auto_infer)
 }
 
 # NEED_FOLD_BIAS = True
@@ -205,6 +209,9 @@ def replace_conv2d(conv, auto_infer):
     torch.nn.Conv2d
         The new conv2d module
     """
+    if(auto_infer.name=='features.7.conv.3'):
+        import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     assert isinstance(conv, nn.Conv2d)
     # the conv layer should only have one input tensor
     assert len(auto_infer.in_masks) == 1
