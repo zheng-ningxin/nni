@@ -150,6 +150,7 @@ class SimulatedAnnealingPruner(Pruner):
         #     self.modules_wrapper, key=lambda wrapper: wrapper.module.weight.data.numel())
 
         # a layer with more weights will have no less pruning rate
+        # import pdb; pdb.set_trace()
         for idx, wrapper in enumerate(self.get_modules_wrapper()):
             # L1Filter Pruner requires to specify op_types
             if self._base_algo in ['l1', 'l2', 'fpgm']:
@@ -183,8 +184,8 @@ class SimulatedAnnealingPruner(Pruner):
         for wrapper in self.get_modules_wrapper():
             num_weights.append(wrapper.module.weight.data.numel())
 
-        num_weights = sorted(num_weights)
-        sparsities = sorted(sparsities)
+        # num_weights = sorted(num_weights)
+        # sparsities = sorted(sparsities)
 
         total_weights = 0
         total_weights_pruned = 0
