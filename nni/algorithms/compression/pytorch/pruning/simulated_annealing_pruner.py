@@ -145,9 +145,9 @@ class SimulatedAnnealingPruner(Pruner):
         '''
         config_list = []
 
-        sparsities = sorted(sparsities)
-        self.modules_wrapper = sorted(
-            self.modules_wrapper, key=lambda wrapper: wrapper.module.weight.data.numel())
+        # sparsities = sorted(sparsities)
+        # self.modules_wrapper = sorted(
+        #     self.modules_wrapper, key=lambda wrapper: wrapper.module.weight.data.numel())
 
         # a layer with more weights will have no less pruning rate
         for idx, wrapper in enumerate(self.get_modules_wrapper()):
