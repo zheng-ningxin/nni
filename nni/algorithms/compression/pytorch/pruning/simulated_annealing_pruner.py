@@ -276,6 +276,14 @@ class SimulatedAnnealingPruner(Pruner):
             while True:
                 # generate perturbation
                 sparsities_perturbated = self._generate_perturbations()
+                valid = True
+                for s in sparsities_perturbated:
+                    print(s)
+                
+                    if s >= 0.95:
+                        valid = False
+                if not valid:
+                    continue
                 config_list = self._sparsities_2_config_list(
                     sparsities_perturbated)
                 _logger.info(
