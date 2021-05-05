@@ -41,7 +41,7 @@ def fix_mask_conflict(masks, model=None, dummy_input=None, traced=None):
         traced = torch.jit.trace(model, dummy_input)
         model.train(training)
 
-    fix_group_mask = GroupMaskConflict(masks, model, dummy_input, traced)
+    # fix_group_mask = GroupMaskConflict(masks, model, dummy_input, traced)
     # masks = fix_group_mask.fix_mask()
     fix_channel_mask = ChannelMaskConflict(masks, model, dummy_input, traced)
     masks = fix_channel_mask.fix_mask()
