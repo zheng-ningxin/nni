@@ -8,7 +8,10 @@ import copy
 import csv
 import json
 import numpy as np
+import torch
+import time
 from schema import And, Optional
+from nni.compression.pytorch import ModelSpeedup
 
 from nni.utils import OptimizeMode
 
@@ -145,9 +148,9 @@ class SimulatedAnnealingPruner(Pruner):
         '''
         config_list = []
 
-        # sparsities = sorted(sparsities)
-        # self.modules_wrapper = sorted(
-        #     self.modules_wrapper, key=lambda wrapper: wrapper.module.weight.data.numel())
+        sparsities = sorted(sparsities)
+        self.modules_wrapper = sorted(
+            self.modules_wrapper, key=lambda wrapper: wrapper.module.weight.data.numel())
 
         # a layer with more weights will have no less pruning rate
         # import pdb; pdb.set_trace()
@@ -184,8 +187,8 @@ class SimulatedAnnealingPruner(Pruner):
         for wrapper in self.get_modules_wrapper():
             num_weights.append(wrapper.module.weight.data.numel())
 
-        # num_weights = sorted(num_weights)
-        # sparsities = sorted(sparsities)
+        num_weights = sorted(num_weights)
+        sparsities = sorted(sparsities)
 
         total_weights = 0
         total_weights_pruned = 0
@@ -252,6 +255,24 @@ class SimulatedAnnealingPruner(Pruner):
     def calc_mask(self, wrapper, **kwargs):
         return None
 
+   
+    
+    def measure_latency(self, model, dummy_input, runtimes=500):
+        times = []
+        with torch.no_grad():
+            for runtime in range(runtimes):
+                torch.cuda.synchronize()
+                start = time.time_ns()
+                out=model(dummy_input)
+                torch.cuda.synchronize()
+                end = time.time_ns()
+                times.append(end-start)
+        _drop = int(runtimes * 0.1)
+        mean = np.mean(times[_drop:-1*_drop])
+        std = np.std(times[_drop:-1*_drop])
+        return mean/1e6, std/1e6
+
+
     def compress(self, return_config_list=False):
         """
         Compress the model with Simulated Annealing.
@@ -276,14 +297,14 @@ class SimulatedAnnealingPruner(Pruner):
             while True:
                 # generate perturbation
                 sparsities_perturbated = self._generate_perturbations()
-                valid = True
-                for s in sparsities_perturbated:
-                    print(s)
+                # valid = True
+                # for s in sparsities_perturbated:
+                #     print(s)
                 
-                    if s >= 0.95:
-                        valid = False
-                if not valid:
-                    continue
+                #     if s >= 0.95:
+                #         valid = False
+                # if not valid:
+                #     continue
                 config_list = self._sparsities_2_config_list(
                     sparsities_perturbated)
                 _logger.info(
@@ -293,9 +314,15 @@ class SimulatedAnnealingPruner(Pruner):
                 pruner = PRUNER_DICT[self._base_algo](copy.deepcopy(self._model_to_prune), config_list)
                 model_masked = pruner.compress()
                 evaluation_result = self._evaluator(model_masked)
-
+                pruner.export_model('./model', './mask')
+                pruner._unwrap_model()
+                dummy_input = torch.rand(32, 3, 32, 32).cuda()
+                sp = ModelSpeedup(model_masked, dummy_input, './mask')
+                sp.speedup_model()
+                del sp
+                latency, _ = self.measure_latency(model_masked, dummy_input)
                 self._search_history.append(
-                    {'sparsity': self._sparsity, 'performance': evaluation_result, 'config_list': config_list})
+                    {'sparsity': self._sparsity, 'performance': evaluation_result, 'config_list': config_list, 'latency':latency})
 
                 if self._optimize_mode is OptimizeMode.Minimize:
                     evaluation_result *= -1
