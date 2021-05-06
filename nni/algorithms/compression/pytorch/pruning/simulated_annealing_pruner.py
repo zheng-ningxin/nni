@@ -259,6 +259,7 @@ class SimulatedAnnealingPruner(Pruner):
     
     def measure_latency(self, model, dummy_input, runtimes=500):
         times = []
+        print(model)
         with torch.no_grad():
             for runtime in range(runtimes):
                 torch.cuda.synchronize()
@@ -364,12 +365,16 @@ class SimulatedAnnealingPruner(Pruner):
                      self._best_config_list)
 
         # save search history
-        with open(os.path.join(self._experiment_data_dir, 'search_history.csv'), 'w') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=['sparsity', 'performance', 'config_list'])
-            writer.writeheader()
-            for item in self._search_history:
-                writer.writerow({'sparsity': item['sparsity'], 'performance': item['performance'], 'config_list': json.dumps(
-                    item['config_list'])})
+        # with open(os.path.join(self._experiment_data_dir, 'search_history.csv'), 'w') as csvfile:
+        #     writer = csv.DictWriter(csvfile, fieldnames=['sparsity', 'performance', 'config_list'])
+        #     writer.writeheader()
+        #     for item in self._search_history:
+        #         writer.writerow({'sparsity': item['sparsity'], 'performance': item['performance'], 'config_list': json.dumps(
+        #             item['config_list'])})
+
+        with open(os.path.join(self._experiment_data_dir, 'search_history.json'), 'w') as history_f:
+            json.dump(self._search_history, history_f)
+
 
         # save best config found and best performance
         if self._optimize_mode is OptimizeMode.Minimize:
